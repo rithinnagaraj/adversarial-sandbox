@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments (Phase B / VM integration)
+.venv/
+venv/
+advc-venv/
+
+# Secrets -- never commit the API key
+.env
+*.env
+
+# Experiment outputs (regenerable)
+logs/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

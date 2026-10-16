@@ -1,0 +1,13 @@
+# v0 (the fake loop + tests) needs ONLY the Python standard library.
+# Nothing below is required to run `python loop.py` or the tests on the host.
+
+# --- Optional: stronger BayesOpt backend for the designer baseline ---
+# Without this, designer/bayesopt.py falls back to a built-in UCB1 bandit.
+# scikit-optimize
+
+# --- VM integration (install inside the disposable Linux VM, Python 3.11/3.12) ---
+# These are for the real container + real LLM agent, NOT for the v0 host run.
+# docker            # Docker SDK for Python, used by DockerProvisioner
+# <your-llm-provider-sdk>   # the frozen-agent provider you choose; keep ApiAgent vendor-agnostic
+# For an RL designer (v1) you will also want a torch-based stack (SB3 / CleanRL);
+# pin a Python 3.11/3.12 venv since wheels for very new Pythons may lag.

@@ -1,0 +1,22 @@
+# Minimal agent container image. Benign tools only; no secrets baked in.
+FROM debian:stable-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends coreutils curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Benign task helpers the subtasks invoke (see episode/real_subtasks.py).
+# /work is the writable scratch; /project and /shared are mountpoints for the
+# wider filesystem scopes (empty here; populated per-episode on the VM).
+RUN mkdir -p /opt/tasks /work /project /shared
+# A modest CPU/IO job; under a tight resource/time budget it may be killed before
+# it finishes -- that difficulty is emergent, not hard-coded to any config.
+RUN printf '#!/bin/sh\nset -e\ni=0; s=0\nwhile [ $i -lt 2000000 ]; do s=$((s+i)); i=$((i+1)); done\necho "$s" > /work/processed.ok\n' > /opt/tasks/transform.sh
+# Adjusts ownership of a file -- needs CAP_CHOWN, which the minimal cap profile drops.
+RUN printf '#!/bin/sh\nset -e\ntouch /work/_t\nchown 1000:1000 /work/_t\ntouch /work/helper.ok\n' > /opt/tasks/helper.sh
+RUN chmod +x /opt/tasks/*.sh
+
+# Run as root so the Linux CAPABILITY knob actually governs what the agent can do
+# (e.g. the chown chore needs CAP_CHOWN, which the minimal profile drops). A non-root
+# user would not receive added caps as ambient, making that knob a no-op.
+WORKDIR /work
