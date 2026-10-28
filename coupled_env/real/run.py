@@ -32,8 +32,32 @@ from coupled_env.scenarios import get
 from episode.agent import ApiAgent, FakeAgent, make_completer
 
 
-def _fresh_tokens() -> dict[str, str]:
-    return {ch: f"FLAG-{ch}-{secrets.token_hex(8)}" for ch in realize.CHANNEL_TOKENS}
+def _fresh_tokens(realize_mod) -> dict[str, str]:
+    return {ch: f"FLAG-{ch}-{secrets.token_hex(8)}" for ch in realize_mod.CHANNEL_TOKENS}
+
+
+def _dump_trace(outcome, rep, log_path):
+    """Print and append a readable per-turn transcript of one episode."""
+    path = log_path.rsplit(".", 1)[0] + "_trace.txt"
+    lines = [f"\n===== episode {outcome.episode_id} rep {rep} "
+             f"(error={outcome.error}, invalid={outcome.invalid_kind}) ====="]
+    for t in outcome.trajectory:
+        head = f"[{t['phase']}{'/' + t['task'] if t['task'] else ''} a{t['attempt']}] " \
+               f"intent={t['intent']} stop_reason={t.get('stop_reason')}"
+        lines.append(head)
+        if t.get("reply"):
+            lines.append(f"    reply: {t['reply']!r}")
+        if t.get("command"):
+            lines.append(f"    cmd  : {t['command']!r}")
+        if t.get("observation"):
+            lines.append(f"    out  : {t['observation']!r}")
+        if t.get("breached_now"):
+            lines.append(f"    BREACHED: {t['breached_now']}")
+    text = "\n".join(lines)
+    print(text)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(text + "\n")
+    print(f"  (trace appended to {path})")
 
 
 def _pick_config(scenario, args):
@@ -43,7 +67,7 @@ def _pick_config(scenario, args):
         return scenario.space.lockdown()
     if args.config == "wide_open":
         return scenario.space.wide_open()
-    return analysis.exact_best(scenario, args.w_u)["config"]   # default: the optimal config
+    return analysis.best_composite(scenario, args.w_u)["config"]  # exact if small, else sampled
 
 
 def main():
@@ -59,15 +83,20 @@ def main():
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--w-u", dest="w_u", type=float, default=0.4)
     ap.add_argument("--fake", action="store_true", help="oracle-backed dry run: no Docker, no API")
+    ap.add_argument("--trace", action="store_true",
+                    help="print + save each turn (agent reply, command, stop_reason, output)")
     ap.add_argument("--log", default="logs/coupled_real.jsonl")
     args = ap.parse_args()
 
     scenario = get(args.scenario)
     config = _pick_config(scenario, args)
 
+    realize_mod = None
     if not args.fake:
-        if args.scenario != "pipeline_box":
-            sys.exit("real Docker execution is implemented for pipeline_box only; use --fake otherwise.")
+        try:
+            realize_mod = realize.get_realization(args.scenario)
+        except KeyError as e:
+            sys.exit(str(e) + " -- use --fake for oracle-backed scenarios.")
         if os.environ.get("ADVCONTAINER_EXPERIMENT_ENV") != "1":
             sys.exit("refusing: set ADVCONTAINER_EXPERIMENT_ENV=1 (VM only).")
         model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3"}.get(args.provider)
@@ -89,9 +118,11 @@ def main():
     with open(args.log, "a", encoding="utf-8") as fh:
         for i in range(args.repeats):
             env = (FakeCoupledEnv(scenario, config) if args.fake
-                   else CoupledDockerEnv(scenario, config, realize, _fresh_tokens()))
+                   else CoupledDockerEnv(scenario, config, realize_mod,
+                                         _fresh_tokens(realize_mod)))
             t0 = time.time()
-            outcome = run_episode(scenario, env, agent, cfg, realize.INSTRUCTIONS)
+            instructions = realize_mod.INSTRUCTIONS if realize_mod else {}
+            outcome = run_episode(scenario, env, agent, cfg, instructions)
             s = score(scenario, outcome.breached, outcome.tasks_done, w_u=args.w_u)
             row = {"scenario": args.scenario, "config": config, "repeat": i,
                    "provider": (None if args.fake else args.provider),
@@ -103,6 +134,8 @@ def main():
             print(f"  rep {i}: composite={s['composite']:.3f} contained={s['fully_contained']} "
                   f"tasks={s['tasks_done']} breached={s['breached']} "
                   f"{'ERR='+outcome.error if outcome.error else ''}")
+            if args.trace:
+                _dump_trace(outcome, i, args.log)
 
     ok = [c for c, r in zip(composites, rows) if r["invalid_kind"] is None]
     print(f"\nmean composite (valid eps): {round(sum(ok)/len(ok), 4) if ok else 'n/a'}   log: {args.log}")

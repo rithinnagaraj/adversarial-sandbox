@@ -40,6 +40,20 @@ class CoupledOutcome:
     tasks_done: list = field(default_factory=list)
     error: str | None = None
     invalid_kind: str | None = None   # "harness_fault" | "env_induced" | None
+    trajectory: list = field(default_factory=list)   # per-turn record for inspection
+
+
+def _raw_reply(agent) -> str:
+    """The agent's last raw assistant text (shows refusals / reasoning), if available."""
+    msgs = getattr(agent, "_messages", None)
+    if msgs and msgs[-1].get("role") == "assistant":
+        return msgs[-1].get("content") or ""
+    return ""
+
+
+def _stop_reason(agent):
+    comp = getattr(agent, "_complete", None)
+    return (getattr(comp, "last_meta", {}) or {}).get("stop_reason")
 
 
 def run_episode(scenario: Scenario, env, agent: Agent, cfg: CoupledRunConfig,
@@ -58,11 +72,20 @@ def run_episode(scenario: Scenario, env, agent: Agent, cfg: CoupledRunConfig,
                                 description=instructions.get(task.id, task.description),
                                 attempt_index=attempt, max_attempts=cfg.subtask_attempts)
                 action = agent.act(obj, last)
+                reply, sr = _raw_reply(agent), _stop_reason(agent)
                 if action.intent == "giveup":
+                    out.trajectory.append({"phase": "subtask", "task": task.id, "attempt": attempt,
+                                           "intent": "giveup", "command": "", "reply": reply[:600],
+                                           "stop_reason": sr, "observation": "", "breached_now": []})
                     break
                 obs, br, task_done = env.step(action.text or ":", "subtask", task.id)
                 breached |= br
                 last = ActionResult(observation=obs)
+                out.trajectory.append({"phase": "subtask", "task": task.id, "attempt": attempt,
+                                       "intent": action.intent, "command": action.text,
+                                       "reply": reply[:600], "stop_reason": sr,
+                                       "observation": obs[:600], "breached_now": sorted(br),
+                                       "task_done": task_done})
                 if task_done:
                     done.add(task.id)
                     break
@@ -72,11 +95,19 @@ def run_episode(scenario: Scenario, env, agent: Agent, cfg: CoupledRunConfig,
             obj = Objective(phase="flag", objective_id="flag", description=cfg.flag_instruction,
                             attempt_index=attempt, max_attempts=cfg.flag_attempts)
             action = agent.act(obj, last)
+            reply, sr = _raw_reply(agent), _stop_reason(agent)
             if action.intent == "giveup":
+                out.trajectory.append({"phase": "flag", "task": None, "attempt": attempt,
+                                       "intent": "giveup", "command": "", "reply": reply[:600],
+                                       "stop_reason": sr, "observation": "", "breached_now": []})
                 break
             obs, br, _ = env.step(action.text or ":", "flag", None)
             breached |= br
             last = ActionResult(observation=obs)
+            out.trajectory.append({"phase": "flag", "task": None, "attempt": attempt,
+                                   "intent": action.intent, "command": action.text,
+                                   "reply": reply[:600], "stop_reason": sr,
+                                   "observation": obs[:600], "breached_now": sorted(br)})
     except Exception as exc:  # our tooling failed -> INVALID, never crash the loop
         out.error = f"{type(exc).__name__}: {exc}"
         out.invalid_kind = "harness_fault"
@@ -144,14 +175,14 @@ class CoupledDockerEnv:
         args = (["run", "-d", "--name", self.container]
                 + self.realize.docker_args(self.config)
                 + self.realize.add_host_args(self.config)
-                + self.realize.env_args(self.config)
+                + self.realize.env_args(self.config, self.tokens)
                 + [self.realize.AGENT_IMAGE, "sleep", "1800"])
         rc, outp = self._docker(args, 60)
         if rc != 0:
             raise RuntimeError(f"docker run failed: {outp.strip()}")
-        # R_proc_snoop: start a sidecar holding R's token in its env, sharing this PID namespace
-        self._docker(["exec", "-d", self.container, "sh", "-lc",
-                      self.realize.proc_sidecar_command(self.tokens["R_proc_snoop"])], 20)
+        # sidecars (e.g. proc-snoop token holders) must share this container's PID namespace
+        for line in self.realize.sidecar_commands(self.tokens):
+            self._docker(["exec", "-d", self.container, "sh", "-lc", line], 20)
         self._started = True
 
     def step(self, action_text, phase, task_id):

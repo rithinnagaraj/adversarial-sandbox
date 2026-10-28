@@ -251,6 +251,7 @@ def test_bedrock_aip_completer_native_anthropic_body():
     assert body["anthropic_version"] == "bedrock-2023-05-31"
     assert body["system"] == "SYS"                        # system pulled out of messages
     assert body["max_tokens"] == 256
+    assert "temperature" not in body                      # omitted by default (Opus 5.5 rejects it)
     assert [m["role"] for m in body["messages"]] == ["user", "assistant"]   # A+B coalesced
     assert body["messages"][0]["content"] == "A\n\nB"
     assert c.last_meta.get("stop_reason") == "end_turn"

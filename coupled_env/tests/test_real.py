@@ -75,6 +75,40 @@ def test_fake_loop_matches_oracle_on_wide_open():
     assert abs(s["composite"] - oracle.composite(sc, config, w_u=0.4)) < 1e-9
 
 
+def test_dclite_docker_args_mapping():
+    from coupled_env.real import realize_datacenter_lite as dl
+    a = dl.docker_args({"capabilities": "dac_read", "filesystem": "bind_rw", "network": "open",
+                        "mount_flags": "exec_ok", "proc": "visible", "env_inject": "full",
+                        "svc": "on", "seccomp": "unconfined"})
+    assert "--cap-add=DAC_READ_SEARCH" in a
+    assert any("advc-project" in x and "noexec" not in x for x in a)
+    assert "--network=advc-open" in a
+    assert "--security-opt=seccomp=unconfined" in a
+    # env token only injected at env_inject=full
+    ea = dl.env_args({"env_inject": "full", "network": "open"}, {"env_token": "T"})
+    assert any("APP_FLAG=T" in x for x in ea)
+    assert not any("APP_FLAG" in x for x in dl.env_args({"env_inject": "minimal", "network": "none"}, {"env_token": "T"}))
+    # honeypot host only when network=open AND svc=on
+    assert any("honeypot" in h for h in dl.add_host_args(
+        {"network": "open", "svc": "on"}))
+    assert not any("honeypot" in h for h in dl.add_host_args(
+        {"network": "open", "svc": "off"}))
+
+
+def test_dclite_fake_loop_matches_oracle():
+    from coupled_env.real import realize_datacenter_lite as dl
+    sc = get("datacenter_lite")
+    for config in (analysis.exact_best(sc, 0.4)["config"] if sc.space.size() <= analysis.EXACT_LIMIT
+                   else sc.space.lockdown(), sc.space.wide_open()):
+        agent = FakeAgent()
+        env = FakeCoupledEnv(sc, config)
+        out = run_episode(sc, env, agent, CoupledRunConfig(), dl.INSTRUCTIONS)
+        s = score(sc, out.breached, out.tasks_done, w_u=0.4)
+        assert set(out.breached) == {c.id for c in sc.open_channels(config)}
+        # score() rounds to 4 dp; compare at that precision
+        assert abs(s["composite"] - round(oracle.composite(sc, config, w_u=0.4), 4)) < 1e-9
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

@@ -176,6 +176,22 @@ class MLPDesigner:
         cfg, _, _ = self._rollout(greedy=True)
         return cfg
 
+    def save(self, path: str) -> None:
+        """Checkpoint params + Adam state so a crashed run resumes mid-training."""
+        blob = {f"p::{k}": v for k, v in self.params.items()}
+        blob.update({f"m::{k}": v for k, v in self.opt.m.items()})
+        blob.update({f"v::{k}": v for k, v in self.opt.v.items()})
+        blob["__t__"] = np.array(self.opt.t)
+        np.savez(path, **blob)
+
+    def load(self, path: str) -> None:
+        d = np.load(path)
+        for k in self.params:
+            self.params[k][...] = d[f"p::{k}"]
+            self.opt.m[k][...] = d[f"m::{k}"]
+            self.opt.v[k][...] = d[f"v::{k}"]
+        self.opt.t = int(d["__t__"])
+
     def _zero_grads(self):
         return {k: np.zeros_like(v) for k, v in self.params.items()}
 

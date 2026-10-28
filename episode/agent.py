@@ -337,7 +337,7 @@ class BedrockAIPCompleter:
     """
 
     def __init__(self, model_arn: str, profile: str | None = None, region: str | None = None,
-                 temperature: float = 0.0, max_tokens: int = 4096,
+                 temperature: float | None = None, max_tokens: int = 4096,
                  anthropic_version: str = "bedrock-2023-05-31", max_retries: int = 6,
                  client=None):
         import os
@@ -365,9 +365,13 @@ class BedrockAIPCompleter:
         import json
         system, convo = _split_system_messages(messages)
         body = {"anthropic_version": self.anthropic_version, "max_tokens": self.max_tokens,
-                "messages": convo, "temperature": self.temperature}
+                "messages": convo}
         if system:
             body["system"] = system
+        # newer Anthropic reasoning models (e.g. Opus 5.5) deprecate `temperature` and reject
+        # the request if it's present -- only send it when explicitly set.
+        if self.temperature is not None:
+            body["temperature"] = self.temperature
         resp = self._client_().invoke_model(
             modelId=self.model_arn, contentType="application/json", accept="application/json",
             body=json.dumps(body))
