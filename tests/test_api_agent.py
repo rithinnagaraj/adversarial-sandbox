@@ -200,6 +200,100 @@ def test_pinned_provider_extra_shape():
     assert extra["provider"]["order"] and isinstance(extra["provider"]["order"], list)
 
 
+def test_sarvam_completer_uses_subscription_header_and_v2_url():
+    from episode.agent import sarvam_completer
+    os.environ["SARVAM_API_KEY"] = "sk-test"
+    captured = {}
+
+    def body(install):
+        def impl(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            return _fake_response(content="ok", provider=None)
+        install(impl)
+        c = sarvam_completer(model="glm5.3")
+        out = c(["m"])
+        assert out == "ok"
+
+    _with_fake_urlopen(body)
+    assert captured["url"] == "https://api.sarvam.ai/v2/chat/completions"
+    # urllib title-cases header keys; Sarvam auth is the subscription-key header, no Bearer
+    assert captured["headers"].get("Api-subscription-key") == "sk-test"
+    assert "Authorization" not in captured["headers"]
+
+
+def test_bedrock_aip_completer_native_anthropic_body():
+    # SSO + native invoke_model + AIP ARN as modelId, with an injected fake client (no boto3).
+    from episode.agent import BedrockAIPCompleter
+    import io, json as _json
+    captured = {}
+
+    class _Body:
+        def read(self):
+            return _json.dumps({"content": [{"type": "text", "text": "hi there"}],
+                                "model": "claude", "stop_reason": "end_turn"}).encode()
+
+    class _FakeClient:
+        def invoke_model(self, **kw):
+            captured.update(kw)
+            return {"body": _Body()}
+
+    arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+    c = BedrockAIPCompleter(arn, client=_FakeClient(), max_tokens=256)
+    msgs = [{"role": "system", "content": "SYS"},
+            {"role": "user", "content": "A"},
+            {"role": "user", "content": "B"},            # consecutive user -> must be merged
+            {"role": "assistant", "content": "ok"}]
+    out = c(msgs)
+    assert out == "hi there"
+    assert captured["modelId"] == arn                     # AIP ARN routes the call
+    body = _json.loads(captured["body"])
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert body["system"] == "SYS"                        # system pulled out of messages
+    assert body["max_tokens"] == 256
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]   # A+B coalesced
+    assert body["messages"][0]["content"] == "A\n\nB"
+    assert c.last_meta.get("stop_reason") == "end_turn"
+
+
+def test_bedrock_completer_uses_bearer_and_regional_openai_url():
+    from episode.agent import bedrock_completer
+    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "bedrock-key"
+    os.environ.pop("AWS_BEDROCK_BASE_URL", None)
+    captured = {}
+
+    def body(install):
+        def impl(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            return _fake_response(content="ok", provider=None)
+        install(impl)
+        bedrock_completer(model="deepseek.v4", region="us-west-2")(["m"])
+
+    _with_fake_urlopen(body)
+    assert captured["url"] == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    assert captured["headers"].get("Authorization") == "Bearer bedrock-key"
+
+
+def test_openrouter_completer_pins_provider_and_bearer():
+    from episode.agent import openrouter_completer
+    os.environ["OPENROUTER_API_KEY"] = "or-test"
+    captured = {}
+
+    def body(install):
+        def impl(req, timeout=None):
+            captured["headers"] = dict(req.headers)
+            captured["body"] = req.data
+            return _fake_response(content="ok")
+        install(impl)
+        openrouter_completer(model="z-ai/glm-5.3")(["m"])
+
+    _with_fake_urlopen(body)
+    import json as _json
+    assert captured["headers"].get("Authorization") == "Bearer or-test"
+    assert "provider" in _json.loads(captured["body"])  # routing pinned by default
+
+
 def test_agent_without_completer_raises():
     import pytest  # noqa
     try:

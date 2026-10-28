@@ -263,6 +263,145 @@ def pinned_provider_extra(order=OPENROUTER_PINNED_PROVIDERS) -> dict:
     return provider_extra(order)
 
 
+def openrouter_completer(model: str, providers=OPENROUTER_PINNED_PROVIDERS, **kw):
+    """Completer for OpenRouter (default). Pins provider routing unless providers is falsy."""
+    return OpenAICompatibleCompleter(
+        model=model, base_url="https://openrouter.ai/api/v1", api_key_env="OPENROUTER_API_KEY",
+        extra=provider_extra(providers) if providers else {}, **kw)
+
+
+def sarvam_completer(model: str = "glm5.3", api_key_env: str = "SARVAM_API_KEY", **kw):
+    """Completer for Sarvam's OpenAI-compatible v2 endpoint.
+
+    Sarvam serves `glm5.3`, `deepseekv4.1-flash`, `gemma4`, `sarvam-105b`. Auth is the
+    `api-subscription-key` header (no 'Bearer' prefix). No provider-routing block (single
+    provider), and reasoning models return `reasoning_content`, which the base completer
+    already falls back to. Set a generous max_tokens for reasoning models (counts toward it).
+    """
+    kw.setdefault("max_tokens", 4096)
+    return OpenAICompatibleCompleter(
+        model=model, base_url="https://api.sarvam.ai/v2", api_key_env=api_key_env,
+        auth_header="api-subscription-key", auth_prefix="", extra={}, **kw)
+
+
+def bedrock_completer(model: str, region: str | None = None, base_url: str | None = None,
+                      api_key_env: str = "AWS_BEARER_TOKEN_BEDROCK", **kw):
+    """Completer for Amazon Bedrock's OpenAI-compatible Chat Completions endpoint.
+
+    Auth is a **Bedrock API key** passed as a bearer token (the base completer's default),
+    read from `AWS_BEARER_TOKEN_BEDROCK` (AWS's standard name). Bedrock is regional, so the
+    endpoint includes the region; override the whole URL via `base_url` or
+    `AWS_BEDROCK_BASE_URL` if your account uses a different form (e.g. the bedrock-mantle
+    endpoint). Model is a Bedrock model id / inference-profile id, passed as `--model`.
+
+    Note: this OpenAI-compatible path serves Bedrock's *open-weight* models (DeepSeek, GLM,
+    Qwen, Mistral, Gemma, gpt-oss). Claude/Nova on Bedrock use the native Anthropic API
+    (SigV4), which this completer does not implement -- reach those via a different provider.
+    """
+    import os
+    region = region or os.environ.get("AWS_REGION") or "us-east-1"
+    base = (base_url or os.environ.get("AWS_BEDROCK_BASE_URL")
+            or f"https://bedrock-runtime.{region}.amazonaws.com/openai/v1")
+    kw.setdefault("max_tokens", 4096)
+    return OpenAICompatibleCompleter(model=model, base_url=base, api_key_env=api_key_env,
+                                     extra={}, **kw)
+
+
+def _split_system_messages(messages: list[dict[str, str]]):
+    """Anthropic-on-Bedrock wants the system prompt as a top-level field and the rest as a
+    user/assistant conversation with NO consecutive same-role turns. Our ApiAgent emits a
+    system message plus sometimes two user turns in a row (feedback + next task), so pull the
+    system text out and coalesce adjacent same-role turns."""
+    system_parts: list[str] = []
+    convo: list[dict[str, str]] = []
+    for m in messages:
+        role, content = m.get("role"), (m.get("content") or "")
+        if role == "system":
+            if content:
+                system_parts.append(content)
+            continue
+        if convo and convo[-1]["role"] == role:
+            convo[-1]["content"] += "\n\n" + content
+        else:
+            convo.append({"role": role, "content": content})
+    return "\n\n".join(system_parts), convo
+
+
+class BedrockAIPCompleter:
+    """Frozen-agent completer for Bedrock via an Application Inference Profile (AIP).
+
+    Matches the admin guide: SSO credentials (resolved from `AWS_PROFILE` by boto3), the
+    native `bedrock-runtime.invoke_model` call, the Anthropic message body, and the **AIP ARN
+    as modelId** (what routes through the profile for per-user cost tracking). boto3 is imported
+    lazily so the host stays dependency-free until a real run. A `client` may be injected for tests.
+    """
+
+    def __init__(self, model_arn: str, profile: str | None = None, region: str | None = None,
+                 temperature: float = 0.0, max_tokens: int = 4096,
+                 anthropic_version: str = "bedrock-2023-05-31", max_retries: int = 6,
+                 client=None):
+        import os
+        self.model_arn = model_arn                      # the AIP ARN, used as modelId
+        self.profile = profile or os.environ.get("AWS_PROFILE")
+        self.region = region or os.environ.get("AWS_REGION") or "us-east-1"
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.anthropic_version = anthropic_version
+        self.max_retries = max_retries
+        self._client = client
+        self.last_meta: dict = {}
+
+    def _client_(self):
+        if self._client is None:
+            import boto3                                 # lazy: only needed for a real run
+            from botocore.config import Config
+            cfg = Config(retries={"max_attempts": self.max_retries, "mode": "adaptive"})
+            session = (boto3.Session(profile_name=self.profile, region_name=self.region)
+                       if self.profile else boto3.Session(region_name=self.region))
+            self._client = session.client("bedrock-runtime", config=cfg)
+        return self._client
+
+    def __call__(self, messages: list[dict[str, str]]) -> str:
+        import json
+        system, convo = _split_system_messages(messages)
+        body = {"anthropic_version": self.anthropic_version, "max_tokens": self.max_tokens,
+                "messages": convo, "temperature": self.temperature}
+        if system:
+            body["system"] = system
+        resp = self._client_().invoke_model(
+            modelId=self.model_arn, contentType="application/json", accept="application/json",
+            body=json.dumps(body))
+        data = json.loads(resp["body"].read())
+        self.last_meta = {k: data.get(k) for k in ("model", "id", "stop_reason") if k in data}
+        blocks = data.get("content") or []
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        return text
+
+
+def bedrock_aip_completer(model_arn: str, **kw):
+    """Bedrock via an Application Inference Profile ARN (SSO + native Anthropic). `model_arn`
+    is the AIP ARN; AWS_PROFILE / AWS_REGION are read from the environment if not passed."""
+    return BedrockAIPCompleter(model_arn, **kw)
+
+
+def make_completer(provider: str, model: str, **kw):
+    """Factory. Providers:
+      - 'bedrock'        : AIP ARN + SSO + native Anthropic invoke_model (the admin-guide path).
+      - 'bedrock-openai' : Bedrock's OpenAI-compatible endpoint + bearer key (open-weight models).
+      - 'sarvam', 'openrouter'.
+    """
+    if provider == "bedrock":
+        return bedrock_aip_completer(model, **kw)
+    if provider == "bedrock-openai":
+        return bedrock_completer(model, **kw)
+    if provider == "openrouter":
+        return openrouter_completer(model, **kw)
+    if provider == "sarvam":
+        return sarvam_completer(model, **kw)
+    raise ValueError(f"unknown provider {provider!r}; "
+                     "use 'bedrock', 'bedrock-openai', 'sarvam', or 'openrouter'")
+
+
 def provider_extra_from_arg(spec: str | None) -> dict:
     """Map a --providers CLI string to a provider block.
 
@@ -307,6 +446,9 @@ class OpenAICompatibleCompleter:
         max_retries: int = 5,
         backoff_base: float = 1.5,
         backoff_cap: float = 30.0,
+        auth_header: str = "Authorization",
+        auth_prefix: str = "Bearer ",
+        extra_headers: dict | None = None,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -318,6 +460,12 @@ class OpenAICompatibleCompleter:
         self.max_retries = max_retries          # retries AFTER the first attempt
         self.backoff_base = backoff_base        # seconds; doubled each retry, capped
         self.backoff_cap = backoff_cap
+        # Auth is vendor-specific: OpenRouter uses `Authorization: Bearer <key>`; Sarvam uses
+        # `api-subscription-key: <key>` with no prefix. Keep both configurable so the same
+        # completer drives either provider (see openrouter_completer / sarvam_completer).
+        self.auth_header = auth_header
+        self.auth_prefix = auth_prefix
+        self.extra_headers = extra_headers or {}
         self.last_meta: dict = {}
         # injectable so tests can assert backoff without actually sleeping
         self._sleep = time.sleep
@@ -352,7 +500,8 @@ class OpenAICompatibleCompleter:
             **self.extra,
         }
         body = json.dumps(payload).encode("utf-8")
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        headers = {self.auth_header: f"{self.auth_prefix}{key}", "Content-Type": "application/json",
+                   **self.extra_headers}
 
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
