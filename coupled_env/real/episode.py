@@ -56,6 +56,12 @@ def _stop_reason(agent):
     return (getattr(comp, "last_meta", {}) or {}).get("stop_reason")
 
 
+def _reasoning(agent) -> str:
+    """The model's reasoning trace for the last call, if the provider returned one."""
+    comp = getattr(agent, "_complete", None)
+    return (getattr(comp, "last_meta", {}) or {}).get("reasoning", "") or ""
+
+
 def run_episode(scenario: Scenario, env, agent: Agent, cfg: CoupledRunConfig,
                 instructions: dict[str, str]) -> CoupledOutcome:
     out = CoupledOutcome(episode_id=uuid.uuid4().hex[:12], config=dict(env.config))
@@ -72,18 +78,19 @@ def run_episode(scenario: Scenario, env, agent: Agent, cfg: CoupledRunConfig,
                                 description=instructions.get(task.id, task.description),
                                 attempt_index=attempt, max_attempts=cfg.subtask_attempts)
                 action = agent.act(obj, last)
-                reply, sr = _raw_reply(agent), _stop_reason(agent)
+                reply, sr, rea = _raw_reply(agent), _stop_reason(agent), _reasoning(agent)
                 if action.intent == "giveup":
                     out.trajectory.append({"phase": "subtask", "task": task.id, "attempt": attempt,
                                            "intent": "giveup", "command": "", "reply": reply[:600],
-                                           "stop_reason": sr, "observation": "", "breached_now": []})
+                                           "reasoning": rea[:8000], "stop_reason": sr,
+                                           "observation": "", "breached_now": []})
                     break
                 obs, br, task_done = env.step(action.text or ":", "subtask", task.id)
                 breached |= br
                 last = ActionResult(observation=obs)
                 out.trajectory.append({"phase": "subtask", "task": task.id, "attempt": attempt,
                                        "intent": action.intent, "command": action.text,
-                                       "reply": reply[:600], "stop_reason": sr,
+                                       "reply": reply[:600], "reasoning": rea[:8000], "stop_reason": sr,
                                        "observation": obs[:600], "breached_now": sorted(br),
                                        "task_done": task_done})
                 if task_done:
@@ -95,18 +102,19 @@ def run_episode(scenario: Scenario, env, agent: Agent, cfg: CoupledRunConfig,
             obj = Objective(phase="flag", objective_id="flag", description=cfg.flag_instruction,
                             attempt_index=attempt, max_attempts=cfg.flag_attempts)
             action = agent.act(obj, last)
-            reply, sr = _raw_reply(agent), _stop_reason(agent)
+            reply, sr, rea = _raw_reply(agent), _stop_reason(agent), _reasoning(agent)
             if action.intent == "giveup":
                 out.trajectory.append({"phase": "flag", "task": None, "attempt": attempt,
                                        "intent": "giveup", "command": "", "reply": reply[:600],
-                                       "stop_reason": sr, "observation": "", "breached_now": []})
+                                       "reasoning": rea[:8000], "stop_reason": sr,
+                                       "observation": "", "breached_now": []})
                 break
             obs, br, _ = env.step(action.text or ":", "flag", None)
             breached |= br
             last = ActionResult(observation=obs)
             out.trajectory.append({"phase": "flag", "task": None, "attempt": attempt,
                                    "intent": action.intent, "command": action.text,
-                                   "reply": reply[:600], "stop_reason": sr,
+                                   "reply": reply[:600], "reasoning": rea[:8000], "stop_reason": sr,
                                    "observation": obs[:600], "breached_now": sorted(br)})
     except Exception as exc:  # our tooling failed -> INVALID, never crash the loop
         out.error = f"{type(exc).__name__}: {exc}"

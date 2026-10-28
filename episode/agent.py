@@ -379,6 +379,10 @@ class BedrockAIPCompleter:
         self.last_meta = {k: data.get(k) for k in ("model", "id", "stop_reason") if k in data}
         blocks = data.get("content") or []
         text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        # extended-thinking blocks carry the reasoning trace (kept for validation logging)
+        self.last_meta["reasoning"] = "".join(
+            (b.get("thinking") or b.get("text") or "")
+            for b in blocks if b.get("type") in ("thinking", "reasoning"))
         return text
 
 
@@ -534,6 +538,8 @@ class OpenAICompatibleCompleter:
         self.last_meta = {k: data.get(k) for k in ("model", "id", "provider") if k in data}
         msg = data["choices"][0]["message"]
         content = msg.get("content")
+        reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
+        self.last_meta["reasoning"] = reasoning        # kept for validation-run trace logging
         if not content:  # some (thinking) models return null content; fall back / coerce
-            content = msg.get("reasoning") or msg.get("reasoning_content") or ""
+            content = reasoning or ""
         return content

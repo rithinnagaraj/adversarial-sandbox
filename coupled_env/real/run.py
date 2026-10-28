@@ -36,28 +36,32 @@ def _fresh_tokens(realize_mod) -> dict[str, str]:
     return {ch: f"FLAG-{ch}-{secrets.token_hex(8)}" for ch in realize_mod.CHANNEL_TOKENS}
 
 
-def _dump_trace(outcome, rep, log_path):
-    """Print and append a readable per-turn transcript of one episode."""
-    path = log_path.rsplit(".", 1)[0] + "_trace.txt"
-    lines = [f"\n===== episode {outcome.episode_id} rep {rep} "
-             f"(error={outcome.error}, invalid={outcome.invalid_kind}) ====="]
-    for t in outcome.trajectory:
-        head = f"[{t['phase']}{'/' + t['task'] if t['task'] else ''} a{t['attempt']}] " \
-               f"intent={t['intent']} stop_reason={t.get('stop_reason')}"
-        lines.append(head)
-        if t.get("reply"):
-            lines.append(f"    reply: {t['reply']!r}")
-        if t.get("command"):
-            lines.append(f"    cmd  : {t['command']!r}")
-        if t.get("observation"):
-            lines.append(f"    out  : {t['observation']!r}")
-        if t.get("breached_now"):
-            lines.append(f"    BREACHED: {t['breached_now']}")
-    text = "\n".join(lines)
-    print(text)
+def _persist_trace(outcome, rep, log_path):
+    """Always store the full per-turn trace (incl. reasoning) of a validation run as JSONL."""
+    path = log_path.rsplit(".", 1)[0] + "_trace.jsonl"
     with open(path, "a", encoding="utf-8") as fh:
-        fh.write(text + "\n")
-    print(f"  (trace appended to {path})")
+        for turn in outcome.trajectory:
+            fh.write(json.dumps({"episode_id": outcome.episode_id, "rep": rep, **turn}) + "\n")
+    return path
+
+
+def _dump_trace(outcome, rep):
+    """Print a readable per-turn transcript (only when --trace)."""
+    print(f"\n===== episode {outcome.episode_id} rep {rep} "
+          f"(error={outcome.error}, invalid={outcome.invalid_kind}) =====")
+    for t in outcome.trajectory:
+        print(f"[{t['phase']}{'/' + t['task'] if t['task'] else ''} a{t['attempt']}] "
+              f"intent={t['intent']} stop_reason={t.get('stop_reason')}")
+        if t.get("reasoning"):
+            print(f"    reasoning: {t['reasoning'][:800]!r}")
+        if t.get("reply"):
+            print(f"    reply: {t['reply']!r}")
+        if t.get("command"):
+            print(f"    cmd  : {t['command']!r}")
+        if t.get("observation"):
+            print(f"    out  : {t['observation']!r}")
+        if t.get("breached_now"):
+            print(f"    BREACHED: {t['breached_now']}")
 
 
 def _pick_config(scenario, args):
@@ -126,7 +130,8 @@ def main():
             s = score(scenario, outcome.breached, outcome.tasks_done, w_u=args.w_u)
             row = {"scenario": args.scenario, "config": config, "repeat": i,
                    "provider": (None if args.fake else args.provider),
-                   "serving": (getattr(completer, "last_meta", {}) if completer else {}),
+                   "serving": ({k: v for k, v in (getattr(completer, "last_meta", {}) or {}).items()
+                                if k != "reasoning"} if completer else {}),
                    "error": outcome.error, "invalid_kind": outcome.invalid_kind,
                    "wall_s": round(time.time() - t0, 1), **s}
             fh.write(json.dumps(row) + "\n"); fh.flush()
@@ -134,8 +139,10 @@ def main():
             print(f"  rep {i}: composite={s['composite']:.3f} contained={s['fully_contained']} "
                   f"tasks={s['tasks_done']} breached={s['breached']} "
                   f"{'ERR='+outcome.error if outcome.error else ''}")
+            tpath = _persist_trace(outcome, i, args.log)    # always store reasoning trace
             if args.trace:
-                _dump_trace(outcome, i, args.log)
+                _dump_trace(outcome, i)
+    print(f"reasoning/turn trace: {tpath}")
 
     ok = [c for c, r in zip(composites, rows) if r["invalid_kind"] is None]
     print(f"\nmean composite (valid eps): {round(sum(ok)/len(ok), 4) if ok else 'n/a'}   log: {args.log}")
