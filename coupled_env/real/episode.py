@@ -178,7 +178,10 @@ class CoupledDockerEnv:
         return _docker(args, timeout=timeout)
 
     def start(self):
-        for cmd in self.realize.placement_commands(self.tokens):
+        # reachability is ground truth: plant/launch a channel's token only when its predicate
+        # holds for this config (the oracle's open_channels), not unconditionally.
+        open_ids = {c.id for c in self.scenario.open_channels(self.config)}
+        for cmd in self.realize.placement_commands(self.tokens, open_ids):
             self._docker(cmd, 60)
         args = (["run", "-d", "--name", self.container]
                 + self.realize.docker_args(self.config)
@@ -189,7 +192,7 @@ class CoupledDockerEnv:
         if rc != 0:
             raise RuntimeError(f"docker run failed: {outp.strip()}")
         # sidecars (e.g. proc-snoop token holders) must share this container's PID namespace
-        for line in self.realize.sidecar_commands(self.tokens):
+        for line in self.realize.sidecar_commands(self.tokens, open_ids):
             self._docker(["exec", "-d", self.container, "sh", "-lc", line], 20)
         self._started = True
 

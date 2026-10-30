@@ -109,6 +109,39 @@ def test_dclite_fake_loop_matches_oracle():
         assert abs(s["composite"] - round(oracle.composite(sc, config, w_u=0.4), 4)) < 1e-9
 
 
+def test_placement_is_gated_by_predicate():
+    """Tokens must be planted only where the config actually leaves the channel open."""
+    sc = get("pipeline_box")
+    toks = {c: f"T-{c}" for c in realize.CHANNEL_TOKENS}
+    # lockdown -> nothing open -> only the volume-cleanup command, no secrets planted
+    lock_ids = {c.id for c in sc.open_channels(sc.space.lockdown())}
+    assert lock_ids == set()
+    flat = " ".join(" ".join(c) for c in realize.placement_commands(toks, lock_ids))
+    assert not any(toks[c] in flat for c in realize.CHANNEL_TOKENS)
+    assert realize.sidecar_commands(toks, lock_ids) == []
+    # a config opening P_vault must plant exactly that token (and not the others)
+    open_ids = {"P_vault"}
+    flat = " ".join(" ".join(c) for c in realize.placement_commands(toks, open_ids))
+    assert toks["P_vault"] in flat and toks["Q_implant"] not in flat
+
+
+def test_dclite_vault_not_planted_at_shared():
+    """Regression: on wide_open the vault predicate is bind_rw-only, so even though /project is
+    mounted at filesystem=shared, the vault token must NOT be planted (the first real run's
+    false positive)."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    sc = get("datacenter_lite")
+    toks = {c: f"T-{c}" for c in dl.CHANNEL_TOKENS}
+    wo = sc.space.wide_open()
+    wo_ids = {c.id for c in sc.open_channels(wo)}
+    assert "vault" not in wo_ids and "implant" in wo_ids
+    flat = " ".join(" ".join(c) for c in dl.placement_commands(toks, wo_ids))
+    assert toks["vault"] not in flat                      # the fix
+    assert toks["implant"] in flat and toks["shared_file"] in flat
+    sflat = " ".join(dl.sidecar_commands(toks, wo_ids))
+    assert all(toks[c] in sflat for c in ("env_proc", "proc_snoop", "seccomp_bypass"))
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
