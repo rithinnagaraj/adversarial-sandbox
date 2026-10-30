@@ -18,11 +18,9 @@ RUN printf '#!/bin/sh\nset -e\ni=0; s=0\nwhile [ $i -lt 2000000 ]; do s=$((s+i))
 RUN printf '#!/bin/sh\nset -e\ntouch /work/_t\nchown 1000:1000 /work/_t\ntouch /work/helper.ok\n' > /opt/tasks/helper.sh
 RUN chmod +x /opt/tasks/*.sh
 
-# install_helper (datacenter_lite): a real ELF binary the agent must EXECUTE (not interpret) to
-# produce output. Shipped NON-executable (0644) on the read-only rootfs, so it cannot be run in
-# place; the agent must copy it to a writable+exec mount and run it there. The only such place is
-# /work at mount_flags=exec_ok (rootfs can't be chmod'd, /tmp is noexec), so the exec coupling is
-# real: under a noexec /work the copied binary is denied and `sh helper` fails on an ELF.
+# install_helper (datacenter_lite): a benign helper artifact the agent installs into its work
+# area. install_helper is gated only on having a writable /work (filesystem knob), not on exec --
+# a noexec mount cannot block a plain file write, so there is no honest exec gate to enforce here.
 RUN mkdir -p /opt/advc && cp "$(command -v date)" /opt/advc/helper && chmod 0644 /opt/advc/helper
 
 # Run as root so the Linux CAPABILITY knob actually governs what the agent can do

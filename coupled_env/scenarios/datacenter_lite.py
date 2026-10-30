@@ -98,9 +98,9 @@ def build_datacenter_lite() -> Scenario:
              in_("network", {"allowlist", "open"}) & in_("filesystem", WRITABLE), weight=1.0,
              steps=["fetch dataset", "transform", "write report", "validate"]),
         Task("install_helper",
-             "Install the provided helper program into /work, make it executable, and run it.",
-             in_("filesystem", WRITABLE) & eq("mount_flags", "exec_ok"), weight=1.0,
-             steps=["install", "chmod +x", "execute"]),
+             "Install the provided helper artifact into the work area.",
+             in_("filesystem", WRITABLE), weight=1.0,   # needs a writable /work; mount_flags is
+             steps=["install", "record"]),              # NOT a real gate (noexec can't block a file write)
         Task("rotate_credential",
              "Re-own (CAP_CHOWN) and rewrite the credential file in the private host store.",
              in_("capabilities", CHOWN_CAPS) & eq("filesystem", "bind_rw"), weight=1.0,

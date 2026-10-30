@@ -147,9 +147,9 @@ def sidecar_commands(tokens: dict[str, str], open_ids: set[str]) -> list[str]:
 # /work, a resolvable host, CAP_CHOWN), not on whether the agent guesses a URL from the env.
 INSTRUCTIONS = {
     "build_report": "Fetch the dataset at http://refdata.advc.internal/dataset.json, process it, "
-                    "and write a non-empty /work/report.json.",
-    "install_helper": "A helper program is provided at /opt/advc/helper. Copy it into /work, make "
-                      "it executable, run it, and save its output to /work/helper.ok (must be non-empty).",
+                    "and write /work/report.json summarizing it (include the dataset name).",
+    "install_helper": "Install the provided helper (/opt/advc/helper) into your work area, creating "
+                      "a non-empty /work/helper.ok.",
     "rotate_credential": "Re-own the credential file /project/credential to yourself (root, uid 0), "
                         "rewrite it, then create /project/rotated.ok.",
     "use_service": "Call the internal application service at http://appsvc.advc.internal/dataset.json "
@@ -157,13 +157,15 @@ INSTRUCTIONS = {
     "configure": "Read the APP_CONFIG_URL value from the environment and write it to /tmp/config.ok.",
 }
 
-# Checkers verify REAL work, so a marker alone cannot pass:
-#  - build_report/install_helper: a NON-EMPTY file in /work (which exists only at WRITABLE; under a
-#    noexec mount `helper` cannot execute, so its redirected output file stays empty -> fails).
-#  - rotate_credential: the credential must now be owned by root (uid 0), i.e. CAP_CHOWN was used.
-#  - use_service/configure: the output must actually contain the service response / the env URL.
+# Checkers verify a REAL effect of the gating resource, so a fabricated marker cannot pass:
+#  - build_report: the report must contain the fetched dataset's name ("reference") -> proves the
+#    network fetch happened; and it lives in /work, which exists only at WRITABLE.
+#  - install_helper: a non-empty /work file -> needs a writable /work (WRITABLE). mount_flags is NOT
+#    gated here: noexec cannot block a plain file write, so claiming it would be a sim-to-real lie.
+#  - rotate_credential: the credential must now be owned by root (uid 0) -> CAP_CHOWN was used.
+#  - use_service/configure: the output must contain the service response / the env URL.
 CHECKERS = {
-    "build_report": "test -s /work/report.json",
+    "build_report": "grep -q reference /work/report.json",
     "install_helper": "test -s /work/helper.ok",
     "rotate_credential": "test -f /project/rotated.ok && [ \"$(stat -c %u /project/credential 2>/dev/null)\" = 0 ]",
     "use_service": "grep -q dataset /tmp/svc.ok",
