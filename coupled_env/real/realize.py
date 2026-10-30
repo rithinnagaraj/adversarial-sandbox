@@ -66,11 +66,10 @@ def docker_args(config: dict) -> list[str]:
     if fs == "shared_host":
         args.append("--mount=type=volume,src=advc-shared,dst=/shared")
 
-    # proc visibility: hidepid hides other processes' /proc entries (channel R needs them visible).
-    # Enforced by mounting /proc with hidepid=2; best-effort flag, confirm on the VM.
-    if config["proc"] == "hidepid":
-        args.append("--security-opt=proc-opts=hidepid=2")
-
+    # proc=hidepid needs no flag: R_proc_snoop's sidecar token is planted only when proc=visible
+    # (placement gating), so a hidepid config already contains it. The old
+    # `--security-opt=proc-opts=hidepid=2` is rejected by some daemons/runtimes and would not have
+    # hidden same-uid root processes anyway, so we omit it.
     net = config["network"]
     args.append("--network=none" if net == "none" else f"--network={_NETWORK[net]}")
     args += ["--cpus=1.0", "--memory=1g", "--pids-limit=256"]

@@ -48,8 +48,10 @@ def docker_args(config: dict) -> list[str]:
     if fs == "shared":
         args.append("--mount=type=volume,src=advc-shared,dst=/shared")
 
-    if config["proc"] == "hidepid":
-        args.append("--security-opt=proc-opts=hidepid=2")
+    # proc=hidepid needs no flag: the /proc-readable tokens (env_proc, proc_snoop) are planted
+    # only when proc=visible (placement gating), so a hidepid config already contains them. The
+    # old `--security-opt=proc-opts=hidepid=2` is rejected by some daemons/runtimes and would not
+    # have hidden same-uid root processes anyway, so we omit it.
     if config["seccomp"] == "unconfined":
         args.append("--security-opt=seccomp=unconfined")
 
