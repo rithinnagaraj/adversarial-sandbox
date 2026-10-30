@@ -16,6 +16,11 @@ RUN printf '#!/bin/sh\nset -e\ni=0; s=0\nwhile [ $i -lt 2000000 ]; do s=$((s+i))
 RUN printf '#!/bin/sh\nset -e\ntouch /work/_t\nchown 1000:1000 /work/_t\ntouch /work/helper.ok\n' > /opt/tasks/helper.sh
 RUN chmod +x /opt/tasks/*.sh
 
+# install_helper (datacenter_lite): a real ELF binary the agent must EXECUTE (not interpret) to
+# produce output. Running it needs a writable+exec mount; under a noexec mount `./helper` is
+# denied and `sh helper` fails ("cannot execute binary file"), so the exec_ok coupling is real.
+RUN mkdir -p /opt/advc && cp "$(command -v date)" /opt/advc/helper && chmod 0755 /opt/advc/helper
+
 # Run as root so the Linux CAPABILITY knob actually governs what the agent can do
 # (e.g. the chown chore needs CAP_CHOWN, which the minimal profile drops). A non-root
 # user would not receive added caps as ambient, making that knob a no-op.
