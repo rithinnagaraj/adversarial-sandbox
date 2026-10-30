@@ -5,8 +5,14 @@
 # Without this, designer/bayesopt.py falls back to a built-in UCB1 bandit.
 # scikit-optimize
 
+# --- coupled_env (v1 UED designer + analysis/training) ---
+# Required for the MLP designer and train_designer (incl. the real sim-to-real loop).
+# The scenario/oracle/real-runner themselves are stdlib-only; this is the one hard dep.
+numpy>=1.24
+
 # --- VM integration (install inside the disposable Linux VM, Python 3.11/3.12) ---
 # These are for the real container + real LLM agent, NOT for the v0 host run.
+# boto3             # only for the Bedrock providers; the jarvis/openrouter paths use stdlib urllib
 # docker            # Docker SDK for Python, used by DockerProvisioner
 # <your-llm-provider-sdk>   # the frozen-agent provider you choose; keep ApiAgent vendor-agnostic
 # For an RL designer (v1) you will also want a torch-based stack (SB3 / CleanRL);
