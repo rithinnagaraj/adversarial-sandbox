@@ -276,9 +276,10 @@ def test_bedrock_completer_uses_bearer_and_regional_openai_url():
     assert captured["headers"].get("Authorization") == "Bearer bedrock-key"
 
 
-def test_jarvis_completer_bearer_and_configurable_base_url():
+def test_jarvis_completer_defaults_to_jarvislabs_endpoint_and_bearer():
     from episode.agent import jarvis_completer
-    os.environ["JARVIS_API_KEY"] = "jv-test"
+    os.environ["JARVISLABS_API_KEY"] = "jv-test"
+    os.environ.pop("JARVIS_BASE_URL", None)
     captured = {}
 
     def body(install):
@@ -287,10 +288,10 @@ def test_jarvis_completer_bearer_and_configurable_base_url():
             captured["headers"] = dict(req.headers)
             return _fake_response(content="ok", provider=None)
         install(impl)
-        jarvis_completer(model="glm-5.3", base_url="https://api.jarvislabs.ai/v1")(["m"])
+        jarvis_completer()(["m"])          # defaults: glm-5.3 @ models.jarvislabs.net/v1
 
     _with_fake_urlopen(body)
-    assert captured["url"] == "https://api.jarvislabs.ai/v1/chat/completions"
+    assert captured["url"] == "https://models.jarvislabs.net/v1/chat/completions"
     assert captured["headers"].get("Authorization") == "Bearer jv-test"
 
 

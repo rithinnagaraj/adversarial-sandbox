@@ -392,22 +392,19 @@ def bedrock_aip_completer(model_arn: str, **kw):
     return BedrockAIPCompleter(model_arn, **kw)
 
 
-def jarvis_completer(model: str, base_url: str | None = None,
-                     api_key_env: str = "JARVIS_API_KEY", **kw):
-    """Completer for a JarvisLabs OpenAI-compatible inference endpoint (e.g. GLM-5.3).
+def jarvis_completer(model: str = "glm-5.3", base_url: str | None = None,
+                     api_key_env: str = "JARVISLABS_API_KEY", **kw):
+    """Completer for JarvisLabs' OpenAI-compatible endpoint (GLM-5.3).
 
-    The endpoint is read from `JARVIS_BASE_URL` (or passed as `base_url`) so no code change is
-    needed when the host is known -- it should be the OpenAI-compatible base, e.g.
-    `https://<host>/v1`. Auth is a bearer key from `JARVIS_API_KEY` (the completer's default).
-    GLM is a reasoning model; `reasoning_content` is captured for the validation trace already.
-    If JarvisLabs uses a non-bearer auth header, tell me and I'll set auth_header/auth_prefix.
+    Defaults match JarvisLabs' published setup: base `https://models.jarvislabs.net/v1`
+    (override via `base_url` or `JARVIS_BASE_URL`), bearer key from `JARVISLABS_API_KEY`,
+    model `glm-5.3`. GLM-5.3 has reasoning ALWAYS ON and those tokens count toward max_tokens,
+    so we set a high default (16384) to avoid truncating the actual command; its
+    `reasoning_content` is captured for the validation trace.
     """
     import os
-    base = base_url or os.environ.get("JARVIS_BASE_URL")
-    if not base:
-        raise RuntimeError("set JARVIS_BASE_URL to the JarvisLabs OpenAI-compatible endpoint "
-                           "(e.g. https://<host>/v1) or pass base_url=")
-    kw.setdefault("max_tokens", 4096)
+    base = base_url or os.environ.get("JARVIS_BASE_URL") or "https://models.jarvislabs.net/v1"
+    kw.setdefault("max_tokens", 16384)
     return OpenAICompatibleCompleter(model=model, base_url=base, api_key_env=api_key_env,
                                      extra={}, **kw)
 

@@ -68,7 +68,8 @@ def real_finetune(designer, sc, args, start_done=0):
     if fake:
         agent = FakeAgent()
     else:
-        model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3"}.get(args.provider)
+        model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3",
+                               "jarvis": "glm-5.3"}.get(args.provider)
         if not model:
             sys.exit("--model is required for a real run (for --provider bedrock pass your AIP ARN).")
         agent = ApiAgent(complete=make_completer(args.provider, model), max_context_chars=16000)

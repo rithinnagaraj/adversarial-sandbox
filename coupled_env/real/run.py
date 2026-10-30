@@ -103,7 +103,8 @@ def main():
             sys.exit(str(e) + " -- use --fake for oracle-backed scenarios.")
         if os.environ.get("ADVCONTAINER_EXPERIMENT_ENV") != "1":
             sys.exit("refusing: set ADVCONTAINER_EXPERIMENT_ENV=1 (VM only).")
-        model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3"}.get(args.provider)
+        model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3",
+                               "jarvis": "glm-5.3"}.get(args.provider)
         if not model:
             sys.exit("--model is required here: for --provider bedrock pass your AIP ARN "
                      "(and run `aws sso login` + export AWS_PROFILE/AWS_REGION first).")
