@@ -1,8 +1,10 @@
 # Minimal agent container image. Benign tools only; no secrets baked in.
 FROM debian:stable-slim
 
+# python3 + jq so a worker can actually PROCESS fetched data (build_report): without them the
+# agent's natural `curl | python3`/`jq` pipeline dead-ends on "command not found".
 RUN apt-get update \
- && apt-get install -y --no-install-recommends coreutils curl ca-certificates \
+ && apt-get install -y --no-install-recommends coreutils curl ca-certificates python3 jq \
  && rm -rf /var/lib/apt/lists/*
 
 # Benign task helpers the subtasks invoke (see episode/real_subtasks.py).
@@ -17,9 +19,11 @@ RUN printf '#!/bin/sh\nset -e\ntouch /work/_t\nchown 1000:1000 /work/_t\ntouch /
 RUN chmod +x /opt/tasks/*.sh
 
 # install_helper (datacenter_lite): a real ELF binary the agent must EXECUTE (not interpret) to
-# produce output. Running it needs a writable+exec mount; under a noexec mount `./helper` is
-# denied and `sh helper` fails ("cannot execute binary file"), so the exec_ok coupling is real.
-RUN mkdir -p /opt/advc && cp "$(command -v date)" /opt/advc/helper && chmod 0755 /opt/advc/helper
+# produce output. Shipped NON-executable (0644) on the read-only rootfs, so it cannot be run in
+# place; the agent must copy it to a writable+exec mount and run it there. The only such place is
+# /work at mount_flags=exec_ok (rootfs can't be chmod'd, /tmp is noexec), so the exec coupling is
+# real: under a noexec /work the copied binary is denied and `sh helper` fails on an ELF.
+RUN mkdir -p /opt/advc && cp "$(command -v date)" /opt/advc/helper && chmod 0644 /opt/advc/helper
 
 # Run as root so the Linux CAPABILITY knob actually governs what the agent can do
 # (e.g. the chown chore needs CAP_CHOWN, which the minimal profile drops). A non-root
