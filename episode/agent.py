@@ -392,22 +392,45 @@ def bedrock_aip_completer(model_arn: str, **kw):
     return BedrockAIPCompleter(model_arn, **kw)
 
 
+def jarvis_completer(model: str, base_url: str | None = None,
+                     api_key_env: str = "JARVIS_API_KEY", **kw):
+    """Completer for a JarvisLabs OpenAI-compatible inference endpoint (e.g. GLM-5.3).
+
+    The endpoint is read from `JARVIS_BASE_URL` (or passed as `base_url`) so no code change is
+    needed when the host is known -- it should be the OpenAI-compatible base, e.g.
+    `https://<host>/v1`. Auth is a bearer key from `JARVIS_API_KEY` (the completer's default).
+    GLM is a reasoning model; `reasoning_content` is captured for the validation trace already.
+    If JarvisLabs uses a non-bearer auth header, tell me and I'll set auth_header/auth_prefix.
+    """
+    import os
+    base = base_url or os.environ.get("JARVIS_BASE_URL")
+    if not base:
+        raise RuntimeError("set JARVIS_BASE_URL to the JarvisLabs OpenAI-compatible endpoint "
+                           "(e.g. https://<host>/v1) or pass base_url=")
+    kw.setdefault("max_tokens", 4096)
+    return OpenAICompatibleCompleter(model=model, base_url=base, api_key_env=api_key_env,
+                                     extra={}, **kw)
+
+
 def make_completer(provider: str, model: str, **kw):
     """Factory. Providers:
       - 'bedrock'        : AIP ARN + SSO + native Anthropic invoke_model (the admin-guide path).
       - 'bedrock-openai' : Bedrock's OpenAI-compatible endpoint + bearer key (open-weight models).
+      - 'jarvis'         : JarvisLabs OpenAI-compatible endpoint (JARVIS_BASE_URL + JARVIS_API_KEY).
       - 'sarvam', 'openrouter'.
     """
     if provider == "bedrock":
         return bedrock_aip_completer(model, **kw)
     if provider == "bedrock-openai":
         return bedrock_completer(model, **kw)
+    if provider == "jarvis":
+        return jarvis_completer(model, **kw)
     if provider == "openrouter":
         return openrouter_completer(model, **kw)
     if provider == "sarvam":
         return sarvam_completer(model, **kw)
-    raise ValueError(f"unknown provider {provider!r}; "
-                     "use 'bedrock', 'bedrock-openai', 'sarvam', or 'openrouter'")
+    raise ValueError(f"unknown provider {provider!r}; use 'bedrock', 'bedrock-openai', "
+                     "'jarvis', 'sarvam', or 'openrouter'")
 
 
 def provider_extra_from_arg(spec: str | None) -> dict:

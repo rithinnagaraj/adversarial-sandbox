@@ -114,8 +114,9 @@ def main():
                     help="proposals evaluated per update during real fine-tune")
     ap.add_argument("--pretrain-rounds", dest="pretrain_rounds", type=int, default=150)
     ap.add_argument("--provider", default="bedrock",
-                    choices=["bedrock", "bedrock-openai", "sarvam", "openrouter"])
-    ap.add_argument("--model", default=None, help="model id; for --provider bedrock pass your AIP ARN")
+                    choices=["bedrock", "bedrock-openai", "jarvis", "sarvam", "openrouter"])
+    ap.add_argument("--model", default=None,
+                    help="model id; bedrock=AIP ARN, jarvis=GLM model slug")
     ap.add_argument("--checkpoint", default="logs/designer_ckpt.npz")
     ap.add_argument("--resume", action="store_true", help="resume from --checkpoint (skip pretrain if done)")
     ap.add_argument("--fake-real", dest="fake_real", action="store_true",

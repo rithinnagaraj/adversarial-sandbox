@@ -276,6 +276,24 @@ def test_bedrock_completer_uses_bearer_and_regional_openai_url():
     assert captured["headers"].get("Authorization") == "Bearer bedrock-key"
 
 
+def test_jarvis_completer_bearer_and_configurable_base_url():
+    from episode.agent import jarvis_completer
+    os.environ["JARVIS_API_KEY"] = "jv-test"
+    captured = {}
+
+    def body(install):
+        def impl(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            return _fake_response(content="ok", provider=None)
+        install(impl)
+        jarvis_completer(model="glm-5.3", base_url="https://api.jarvislabs.ai/v1")(["m"])
+
+    _with_fake_urlopen(body)
+    assert captured["url"] == "https://api.jarvislabs.ai/v1/chat/completions"
+    assert captured["headers"].get("Authorization") == "Bearer jv-test"
+
+
 def test_openrouter_completer_pins_provider_and_bearer():
     from episode.agent import openrouter_completer
     os.environ["OPENROUTER_API_KEY"] = "or-test"

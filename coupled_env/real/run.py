@@ -78,9 +78,9 @@ def main():
     ap = argparse.ArgumentParser(description="Run a coupled_env config on real containers.")
     ap.add_argument("--scenario", default="pipeline_box")
     ap.add_argument("--provider", default="bedrock",
-                    choices=["bedrock", "bedrock-openai", "sarvam", "openrouter"])
+                    choices=["bedrock", "bedrock-openai", "jarvis", "sarvam", "openrouter"])
     ap.add_argument("--model", default=None,
-                    help="model id; for --provider bedrock pass your AIP ARN. "
+                    help="model id; for bedrock pass your AIP ARN, for jarvis the GLM model slug. "
                          "defaults: glm5.3 (sarvam) / z-ai/glm-5.3 (openrouter)")
     ap.add_argument("--config", default="best", choices=["best", "lockdown", "wide_open"])
     ap.add_argument("--vector", default=None, help="explicit config, e.g. 0,1,2,1,0 (overrides --config)")
