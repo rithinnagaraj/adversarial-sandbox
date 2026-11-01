@@ -22,9 +22,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import secrets
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -43,58 +44,98 @@ def oracle_train(designer, sc, rounds, batch, w_u, tag="oracle", log_every=15):
             print(f"  [{tag}] round {r:4d}  batch_mean={np.mean(rewards):+.3f}  recommend={rc:+.3f}")
 
 
-def _fresh_tokens(realize_mod):
-    return {ch: f"FLAG-{ch}-{secrets.token_hex(8)}" for ch in realize_mod.CHANNEL_TOKENS}
+def _uses_shared_service(sc, cfg, realize_mod) -> bool:
+    """True if this config's placement execs a SHARED singleton container (the honeypot).
+    Such episodes must be serialized under parallelism (the token write would race)."""
+    if realize_mod is None:
+        return False
+    open_ids = {c.id for c in sc.open_channels(cfg)}
+    sentinel = {ch: "X" for ch in realize_mod.CHANNEL_TOKENS}
+    return any(c and c[0] == "exec" for c in realize_mod.placement_commands(sentinel, open_ids))
 
 
-def _real_reward(sc, cfg, realize_mod, agent, runcfg, instructions, w_u, fake):
-    """Run ONE real (or fake) episode for `cfg`; return its graded composite + outcome."""
-    from coupled_env.real.episode import CoupledDockerEnv, FakeCoupledEnv, run_episode
-    from coupled_env.real.scoring import score
-    env = (FakeCoupledEnv(sc, cfg) if fake
-           else CoupledDockerEnv(sc, cfg, realize_mod, _fresh_tokens(realize_mod)))
-    out = run_episode(sc, env, agent, runcfg, instructions)
-    return score(sc, out.breached, out.tasks_done, w_u=w_u)["composite"], out
+def _episode_record(sc, cfg, scored, out, seed, episode_idx):
+    """Ordered per-episode training-log line (for convergence/aggregation)."""
+    return {"seed": seed, "episode": episode_idx,
+            "config_vector": sc.space.to_vector(cfg),
+            "composite": scored["composite"], "containment": scored["containment"],
+            "utility": scored["utility"], "breached": scored["breached"],
+            "tasks_done": scored["tasks_done"], "invalid_kind": out.invalid_kind,
+            "episode_id": out.episode_id}
 
 
 def real_finetune(designer, sc, args, start_done=0):
     from coupled_env.real import realize as realize_pkg
+    from coupled_env.real.cache import RealEvalCache, realized_key
     from coupled_env.real.episode import CoupledRunConfig
-    from episode.agent import ApiAgent, FakeAgent, make_completer
+    from coupled_env.real.runner import make_agent, outcome_sample, run_one
 
     fake = args.fake_real
     realize_mod = None if fake else realize_pkg.get_realization(sc.id)
     instructions = {} if fake else realize_mod.INSTRUCTIONS
-    if fake:
-        agent = FakeAgent()
-    else:
+    model = None
+    if not fake:
         model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3",
                                "jarvis": "glm-5.3"}.get(args.provider)
         if not model:
             sys.exit("--model is required for a real run (for --provider bedrock pass your AIP ARN).")
-        agent = ApiAgent(complete=make_completer(args.provider, model), max_context_chars=16000)
+    shared_agent, _ = make_agent(args.provider, model, fake)   # reused in the serial path
     runcfg = CoupledRunConfig()
+    parallel = max(1, args.parallel)
+    honeypot_lock = threading.Lock()
+
+    cache = RealEvalCache(args.cache)
+    ep_log = args.episode_log
+    os.makedirs(os.path.dirname(ep_log) or ".", exist_ok=True)
     meta_path = args.checkpoint + ".json"
+
+    def evaluate(cfg, episode_idx):
+        """One episode -> (composite, outcome). Fresh isolated namespace + agent when parallel;
+        always appends the outcome to the sample bank + the ordered episode log."""
+        if parallel > 1:
+            ns = f"ep{episode_idx}"
+            agent, _ = make_agent(args.provider, model, fake)
+        else:
+            ns, agent = "", shared_agent
+        if _uses_shared_service(sc, cfg, realize_mod):
+            with honeypot_lock:
+                scored, out, wall = run_one(sc, cfg, realize_mod, agent, runcfg,
+                                            instructions, args.w_u, fake, namespace=ns)
+        else:
+            scored, out, wall = run_one(sc, cfg, realize_mod, agent, runcfg,
+                                        instructions, args.w_u, fake, namespace=ns)
+        key = realized_key(sc, cfg, realize_mod)
+        cache.add(key, outcome_sample(out, scored, wall), config=sc.space.to_vector(cfg))
+        with open(ep_log, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(_episode_record(sc, cfg, scored, out, args.seed, episode_idx)) + "\n")
+        return scored["composite"], out
+
     done = start_done
     invalids = 0
     t0 = time.time()
     while done < args.real_episodes:
         batch = min(args.real_batch, args.real_episodes - done)
         rollouts = [designer.propose() for _ in range(batch)]
-        rewards = []
-        for cfg, _info in rollouts:
-            rew, out = _real_reward(sc, cfg, realize_mod, agent, runcfg, instructions, args.w_u, fake)
-            rewards.append(rew)
-            invalids += int(out.invalid_kind is not None)
-            done += 1
+        idxs = list(range(done + 1, done + 1 + batch))
+        if parallel > 1 and not fake and batch > 1:
+            with ThreadPoolExecutor(max_workers=min(parallel, batch)) as ex:
+                results = list(ex.map(lambda a: evaluate(a[0][0], a[1]),
+                                      zip(rollouts, idxs)))
+        else:
+            results = [evaluate(cfg, i) for (cfg, _info), i in zip(rollouts, idxs)]
+        rewards = [rew for rew, _ in results]
+        invalids += sum(out.invalid_kind is not None for _, out in results)
+        done += batch
         designer.update_batch(rollouts, rewards)
         designer.save(args.checkpoint)                       # checkpoint EVERY round
         with open(meta_path, "w", encoding="utf-8") as fh:
-            json.dump({"scenario": sc.id, "pretrain_done": True, "real_episodes_done": done}, fh)
+            json.dump({"scenario": sc.id, "pretrain_done": True, "real_episodes_done": done,
+                       "seed": args.seed}, fh)
         rc = oracle.composite(sc, designer.recommend(), w_u=args.w_u)
         print(f"  [real] ep {done:4d}/{args.real_episodes}  batch_mean={np.mean(rewards):+.3f}  "
-              f"recommend(oracle)={rc:+.3f}  invalids={invalids}  ckpt={args.checkpoint}")
+              f"recommend(oracle)={rc:+.3f}  invalids={invalids}  par={parallel}  ckpt={args.checkpoint}")
     print(f"  real fine-tune wall: {time.time() - t0:.0f}s, {invalids} invalid episodes")
+    print(f"  sample bank: {args.cache}   episode log: {ep_log}")
 
 
 def main():
@@ -122,7 +163,20 @@ def main():
     ap.add_argument("--resume", action="store_true", help="resume from --checkpoint (skip pretrain if done)")
     ap.add_argument("--fake-real", dest="fake_real", action="store_true",
                     help="use the oracle-backed fake env for the 'real' loop (host-testable, no Docker/LLM)")
+    ap.add_argument("--parallel", type=int, default=1,
+                    help="concurrent real episodes per batch (>1 uses per-episode isolated volumes; "
+                         "honeypot-opening configs are auto-serialized). 1 = validated serial pipeline.")
+    ap.add_argument("--cache", default=None,
+                    help="real-episode sample bank (JSONL, keyed on realized spec); "
+                         "default <checkpoint-stem>_bank.jsonl")
+    ap.add_argument("--episode-log", dest="episode_log", default=None,
+                    help="ordered per-episode training log (JSONL); default <checkpoint-stem>_episodes.jsonl")
     args = ap.parse_args()
+    stem = args.checkpoint.rsplit(".", 1)[0]
+    if args.cache is None:
+        args.cache = stem + "_bank.jsonl"
+    if args.episode_log is None:
+        args.episode_log = stem + "_episodes.jsonl"
 
     sc = get(args.scenario)
     kind = "mlp" if args.real else args.designer      # real mode needs the MLP (checkpoint + rollout cache)

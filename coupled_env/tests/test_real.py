@@ -161,9 +161,95 @@ def test_dclite_private_store_channels_only_at_bind_rw():
     assert "credential" in bflat and "credential" in flat
 
 
+# --- Phase 0: realized-spec cache key + sample bank ------------------------------
+
+def test_realized_key_ignores_distractors_splits_on_realization():
+    """The cache key is derived from the REALIZED spec, not a hand-labeled knob list. Two
+    configs differing only in a distractor knob (which the realization never applies) must share
+    a key; a core knob that changes the docker args must split it -- discovered from R, not asserted."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    from coupled_env.real.cache import realized_key
+    sc = get("datacenter_lite")
+    base = sc.space.lockdown()
+    distractor = dict(base, apparmor="complain", userns="on", pids_limit="high")
+    assert realized_key(sc, base, dl) == realized_key(sc, distractor, dl)   # distractors fall out
+    core = dict(base, filesystem="bind_rw")                                  # changes docker_args
+    assert realized_key(sc, base, dl) != realized_key(sc, core, dl)
+
+
+def test_realized_key_fake_env_keys_on_full_config():
+    """With no realization (fake env) the key falls back to the full config, so it is still sound
+    (just fewer collisions) and never leaks a core/distractor partition."""
+    from coupled_env.real.cache import realized_key
+    sc = get("datacenter_lite")
+    base = sc.space.lockdown()
+    assert realized_key(sc, base, None) == realized_key(sc, dict(base), None)
+    assert realized_key(sc, base, None) != realized_key(sc, dict(base, apparmor="complain"), None)
+
+
+def test_real_eval_cache_bank_roundtrips(tmp_path):
+    from coupled_env.real.cache import RealEvalCache
+    path = str(tmp_path / "bank.jsonl")
+    c = RealEvalCache(path)
+    c.add("k1", {"composite": 1.3, "invalid_kind": None}, config=[0, 1])
+    c.add("k1", {"composite": 1.1, "invalid_kind": None}, config=[0, 1])
+    c.add("k1", {"composite": 0.0, "invalid_kind": "harness_fault"}, config=[0, 1])
+    assert c.n_valid("k1") == 2 and c.composites("k1") == [1.3, 1.1]
+    reloaded = RealEvalCache(path)                       # survives reopen (--resume)
+    assert reloaded.n_valid("k1") == 2 and reloaded.composites("k1") == [1.3, 1.1]
+
+
+# --- Phase 0: per-episode namespace isolation (parallelism) ----------------------
+
+def test_namespace_default_is_byte_identical():
+    """ns='' must reproduce the validated serial pipeline exactly."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    cfg = dict(get("datacenter_lite").space.lockdown(), filesystem="bind_rw")
+    assert dl.docker_args(cfg) == dl.docker_args(cfg, "")
+    toks = {c: f"T-{c}" for c in dl.CHANNEL_TOKENS}
+    assert dl.placement_commands(toks, {"vault"}) == dl.placement_commands(toks, {"vault"}, "")
+
+
+def test_namespace_isolates_volume_names():
+    from coupled_env.real import realize_datacenter_lite as dl
+    cfg = dict(get("datacenter_lite").space.lockdown(), filesystem="bind_rw")
+    base = " ".join(dl.docker_args(cfg))
+    iso = " ".join(dl.docker_args(cfg, "ep7"))
+    assert "src=advc-project," in base and "src=advc-project-ep7," in iso
+    toks = {c: f"T-{c}" for c in dl.CHANNEL_TOKENS}
+    flat = " ".join(" ".join(c) for c in dl.placement_commands(toks, {"vault"}, "ep7"))
+    assert "advc-project-ep7:/project" in flat
+
+
+# --- Phase 1: held-out evaluation path against the fake env ----------------------
+
+def test_holdout_eval_fake_matches_oracle(tmp_path):
+    """evaluate_config over the fake env must pool k samples and recover the oracle composite
+    (the fake env is a worst-case deterministic agent, so real==oracle there)."""
+    from coupled_env.real.cache import RealEvalCache
+    from coupled_env.real.episode import CoupledRunConfig
+    from coupled_env.real.holdout_eval import evaluate_config
+    from coupled_env.real.runner import make_agent
+    sc = get("datacenter_lite")
+    cfg = sc.space.lockdown()
+    agent, _ = make_agent("jarvis", None, fake=True)
+    cache = RealEvalCache(str(tmp_path / "bank.jsonl"))
+    log = str(tmp_path / "holdout.jsonl")
+    r = evaluate_config(sc, "lockdown", cfg, None, agent, CoupledRunConfig(), {}, 0.4,
+                        True, 3, cache, log, seed=0)
+    assert r["n"] >= 3
+    assert abs(r["ci"]["mean"] - round(oracle.composite(sc, cfg, w_u=0.4), 4)) < 1e-9
+    assert r["gap_oracle_minus_real"] == 0.0            # fake agent == oracle worst case
+
+
 if __name__ == "__main__":
+    import inspect
+
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
+        if inspect.signature(fn).parameters:        # needs a pytest fixture (e.g. tmp_path)
+            print(f"skip {fn.__name__} (needs fixture; run under pytest)")
+            continue
         fn()
         print(f"ok  {fn.__name__}")
-    print("test_real: all passed")
+    print("test_real: all passed (fixture tests skipped; run `pytest` for those)")

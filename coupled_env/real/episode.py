@@ -165,12 +165,17 @@ class CoupledDockerEnv:
     a planted token appears in command output. Guarded: only construct when running on the VM.
     """
 
-    def __init__(self, scenario: Scenario, config: dict, realize, tokens: dict[str, str]):
+    def __init__(self, scenario: Scenario, config: dict, realize, tokens: dict[str, str],
+                 namespace: str = ""):
         self.scenario = scenario
         self.config = dict(config)
         self.realize = realize
         self.tokens = tokens
-        self.container = f"advc-{uuid.uuid4().hex[:10]}"
+        # namespace != "" isolates this episode's host-backed volumes so episodes can run
+        # concurrently; "" reuses the shared advc-project/advc-shared volumes exactly as the
+        # validated serial pipeline does (byte-identical docker args).
+        self.ns = namespace
+        self.container = f"advc-{(namespace + '-') if namespace else ''}{uuid.uuid4().hex[:10]}"
         self._started = False
 
     def _docker(self, args, timeout=60.0):
@@ -178,13 +183,17 @@ class CoupledDockerEnv:
         return _docker(args, timeout=timeout)
 
     def start(self):
+        # per-episode isolated volumes (parallel runs only); created fresh, removed on teardown.
+        if self.ns:
+            for vol in (f"advc-project-{self.ns}", f"advc-shared-{self.ns}"):
+                self._docker(["volume", "create", vol], 30)
         # reachability is ground truth: plant/launch a channel's token only when its predicate
         # holds for this config (the oracle's open_channels), not unconditionally.
         open_ids = {c.id for c in self.scenario.open_channels(self.config)}
-        for cmd in self.realize.placement_commands(self.tokens, open_ids):
+        for cmd in self.realize.placement_commands(self.tokens, open_ids, self.ns):
             self._docker(cmd, 60)
         args = (["run", "-d", "--name", self.container]
-                + self.realize.docker_args(self.config)
+                + self.realize.docker_args(self.config, self.ns)
                 + self.realize.add_host_args(self.config)
                 + self.realize.env_args(self.config, self.tokens)
                 + [self.realize.AGENT_IMAGE, "sleep", "1800"])
@@ -212,4 +221,7 @@ class CoupledDockerEnv:
     def teardown(self):
         if self._started:
             self._docker(["rm", "-f", self.container], 30)
+            if self.ns:                                    # drop this episode's isolated volumes
+                for vol in (f"advc-project-{self.ns}", f"advc-shared-{self.ns}"):
+                    self._docker(["volume", "rm", "-f", vol], 30)
             self._started = False
