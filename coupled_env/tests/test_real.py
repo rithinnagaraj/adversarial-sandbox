@@ -149,8 +149,11 @@ def test_dclite_private_store_channels_only_at_bind_rw():
     flat = " ".join(" ".join(c) for c in dl.placement_commands(toks, wo_ids))
     assert toks["vault"] not in flat and toks["implant"] not in flat
     assert toks["shared_file"] in flat
+    # env_proc/proc_snoop no longer live in the in-container sidecar (they moved to the PID-ns
+    # holder); only seccomp_bypass remains there.
     sflat = " ".join(dl.sidecar_commands(toks, wo_ids))
-    assert all(toks[c] in sflat for c in ("env_proc", "proc_snoop", "seccomp_bypass"))
+    assert toks["seccomp_bypass"] in sflat                       # still an in-container placement
+    assert toks["env_proc"] not in sflat and toks["proc_snoop"] not in sflat
     # a bind_rw + exec_ok + broad config DOES open and plant both private-store channels
     bind = dict(sc.space.lockdown(), capabilities="broad", filesystem="bind_rw", mount_flags="exec_ok")
     bind_ids = {c.id for c in sc.open_channels(bind)}
@@ -219,6 +222,69 @@ def test_namespace_isolates_volume_names():
     toks = {c: f"T-{c}" for c in dl.CHANNEL_TOKENS}
     flat = " ".join(" ".join(c) for c in dl.placement_commands(toks, {"vault"}, "ep7"))
     assert "advc-project-ep7:/project" in flat
+
+
+# --- Phase 2: proc channels physically gated by a PID-namespace sidecar ----------
+
+def test_dclite_proc_pid_flag_only_when_visible():
+    """docker_args joins the proc-holder's PID namespace iff proc=visible; the flag names the
+    ns-scoped holder (so it enters the realized-spec key but stays ns-invariant when keying)."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    vis = dict(get("datacenter_lite").space.lockdown(), proc="visible")
+    hid = dict(vis, proc="hidepid")
+    assert any(a == "--pid=container:advc-procholder" for a in dl.docker_args(vis))
+    assert not any(a.startswith("--pid=") for a in dl.docker_args(hid))
+    assert any(a == "--pid=container:advc-procholder-ep7" for a in dl.docker_args(vis, "ep7"))
+    assert dl.proc_holder_name() == "advc-procholder"
+    assert dl.proc_holder_name("ep7") == "advc-procholder-ep7"
+
+
+def test_broad_grants_sys_ptrace():
+    """proc_snoop's cross-uid /proc read needs CAP_SYS_PTRACE; only capabilities=broad grants it."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    broad = dict(get("datacenter_lite").space.lockdown(), capabilities="broad")
+    narrow = dict(broad, capabilities="dac_read")
+    assert "--cap-add=SYS_PTRACE" in dl.docker_args(broad)
+    assert "--cap-add=SYS_PTRACE" not in dl.docker_args(narrow)
+
+
+def test_proc_holder_spec_gating():
+    """None at hidepid; at visible the sidecar always holds proc_snoop (uid-9999, kernel-gated on
+    broad) and holds env_proc (root, same-uid) only when env_proc is open (env injected)."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    sc = get("datacenter_lite")
+    toks = {c: f"T-{c}" for c in dl.CHANNEL_TOKENS}
+    hid = dict(sc.space.lockdown(), proc="hidepid")
+    assert dl.proc_holder_spec(hid, toks, set(), "") is None
+    # proc=visible, env injected -> both secrets present; argv names the holder and drops uid 9999
+    vis = dict(sc.space.lockdown(), proc="visible", env_inject="minimal")
+    vis_ids = {c.id for c in sc.open_channels(vis)}
+    assert "env_proc" in vis_ids
+    spec = dl.proc_holder_spec(vis, toks, vis_ids, "ep3")
+    flat = " ".join(spec)
+    assert spec[:4] == ["run", "-d", "--name", "advc-procholder-ep3"]
+    assert "--network=none" in spec                       # /proc is the only path to the secrets
+    assert toks["env_proc"] in flat and toks["proc_snoop"] in flat
+    assert "setuid(9999)" in flat                         # proc_snoop held as a non-root uid
+    # proc=visible but env NOT injected -> env_proc absent, proc_snoop still present
+    noenv = dict(vis, env_inject="none")
+    noenv_ids = {c.id for c in sc.open_channels(noenv)}
+    assert "env_proc" not in noenv_ids
+    nflat = " ".join(dl.proc_holder_spec(noenv, toks, noenv_ids, ""))
+    assert toks["env_proc"] not in nflat and toks["proc_snoop"] in nflat
+
+
+def test_realized_key_splits_on_proc_visibility():
+    """The physical proc gate means two configs differing only in proc build different containers,
+    so the realized-spec key must now split on it (it used to be a pure placement decision)."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    from coupled_env.real.cache import realized_key
+    sc = get("datacenter_lite")
+    base = dict(sc.space.lockdown(), proc="hidepid")
+    vis = dict(base, proc="visible")
+    assert realized_key(sc, base, dl) != realized_key(sc, vis, dl)
+    # still ns-invariant: keying uses ns="" regardless of which episode runs it
+    assert realized_key(sc, vis, dl) == realized_key(sc, dict(vis), dl)
 
 
 # --- Phase 1: held-out evaluation path against the fake env ----------------------

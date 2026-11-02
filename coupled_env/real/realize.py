@@ -25,11 +25,15 @@ _NETWORK = {"none": "none", "loopback": "advc-isolated",
 
 # capabilities -> (cap_drop, cap_add). A privilege in {chown, dac_read, broad} can defeat the
 # mode-600 vault (channel P): chown re-owns it, dac_read bypasses the read check, broad has both.
+# broad also carries SYS_PTRACE: it is the permissive profile, and SYS_PTRACE is exactly the
+# privilege that lets a process read ANOTHER uid's /proc/<pid>/environ -- the physical mechanism
+# behind datacenter_lite's proc_snoop channel (proc=visible & caps=broad). Docker's default set
+# omits SYS_PTRACE, so without this add proc_snoop could never be physically realized.
 _CAPS = {
     "drop_all": (["ALL"], []),
     "chown":    (["ALL"], ["CHOWN"]),
     "dac_read": (["ALL"], ["DAC_READ_SEARCH"]),
-    "broad":    ([], []),                 # docker default caps (CHOWN + DAC_OVERRIDE + SETUID)
+    "broad":    ([], ["SYS_PTRACE"]),     # docker default caps (CHOWN/DAC_OVERRIDE/SETUID) + SYS_PTRACE
 }
 
 # fixed service IPs (match vm/setup.sh); resolved via /etc/hosts so it works under runc + gVisor

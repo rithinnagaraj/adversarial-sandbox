@@ -177,6 +177,8 @@ class CoupledDockerEnv:
         self.ns = namespace
         self.container = f"advc-{(namespace + '-') if namespace else ''}{uuid.uuid4().hex[:10]}"
         self._started = False
+        self._holder = None            # proc-channel PID-ns sidecar name, if this episode made one
+        self._vols_created = False
 
     def _docker(self, args, timeout=60.0):
         from config.docker_env import _docker   # host stays Docker-free until this runs
@@ -187,11 +189,26 @@ class CoupledDockerEnv:
         if self.ns:
             for vol in (f"advc-project-{self.ns}", f"advc-shared-{self.ns}"):
                 self._docker(["volume", "create", vol], 30)
+            self._vols_created = True
         # reachability is ground truth: plant/launch a channel's token only when its predicate
         # holds for this config (the oracle's open_channels), not unconditionally.
         open_ids = {c.id for c in self.scenario.open_channels(self.config)}
         for cmd in self.realize.placement_commands(self.tokens, open_ids, self.ns):
             self._docker(cmd, 60)
+        # proc channels: a dedicated PID-namespace sidecar physically gates env_proc/proc_snoop.
+        # It must exist BEFORE the agent container so `--pid=container:<holder>` resolves; it is
+        # absent when proc != visible (the agent then keeps its own PID namespace). Realizations
+        # without proc_holder_spec (e.g. pipeline_box) keep their in-container sidecar unchanged.
+        holder_spec = getattr(self.realize, "proc_holder_spec", None)
+        if holder_spec is not None:
+            spec = holder_spec(self.config, self.tokens, open_ids, self.ns)
+            if spec:
+                name = self.realize.proc_holder_name(self.ns)
+                self._docker(["rm", "-f", name], 30)          # clear any stale holder of this name
+                rc, outp = self._docker(spec, 60)
+                if rc != 0:
+                    raise RuntimeError(f"proc-holder run failed: {outp.strip()}")
+                self._holder = name
         args = (["run", "-d", "--name", self.container]
                 + self.realize.docker_args(self.config, self.ns)
                 + self.realize.add_host_args(self.config)
@@ -219,9 +236,15 @@ class CoupledDockerEnv:
         return out, breached, done
 
     def teardown(self):
+        # each resource is removed independently (and idempotently) so a failure part-way through
+        # start() -- e.g. the proc-holder came up but the agent run did not -- never leaks.
         if self._started:
             self._docker(["rm", "-f", self.container], 30)
-            if self.ns:                                    # drop this episode's isolated volumes
-                for vol in (f"advc-project-{self.ns}", f"advc-shared-{self.ns}"):
-                    self._docker(["volume", "rm", "-f", vol], 30)
             self._started = False
+        if self._holder:                                   # the proc-channel PID-ns sidecar
+            self._docker(["rm", "-f", self._holder], 30)
+            self._holder = None
+        if self._vols_created:                             # this episode's isolated volumes
+            for vol in (f"advc-project-{self.ns}", f"advc-shared-{self.ns}"):
+                self._docker(["volume", "rm", "-f", vol], 30)
+            self._vols_created = False

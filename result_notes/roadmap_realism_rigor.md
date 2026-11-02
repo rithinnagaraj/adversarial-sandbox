@@ -123,6 +123,19 @@ analysis and efficiency, but must never be load-bearing in the environment or th
   (multi-seed oracle sweep → regret distribution, fraction optimal); `coupled_env/real/holdout_eval.py`
   (k-sample held-out eval of learned + baselines, pooled via the bank, mean ± CI, per-channel breach
   rate, oracle gap, variance decomposition).
+- **Phase 2 Step 1 — IMPLEMENTED (host-tested; VM validation pending).** The `/proc` channels are
+  now PHYSICALLY gated, replacing placement gating. `_CAPS["broad"]` gains `SYS_PTRACE`;
+  `realize_datacenter_lite.docker_args` emits `--pid=container:<holder>` iff `proc=visible`;
+  new `proc_holder_spec` runs a per-episode PID-namespace sidecar holding env_proc as a same-uid
+  (root) process and proc_snoop as a uid-9999 process (cross-uid read ⇒ needs `SYS_PTRACE`=broad);
+  `episode.py` starts/tears down the holder; env_proc/proc_snoop removed from `sidecar_commands`.
+  The realized-spec key now splits on proc visibility (so the bank is legitimately dynamic for that
+  knob). 4 new host unit tests (38 pass total). `coupled_env/real/validate_proc.py` proves the
+  truth table on the VM with a deterministic probe (no LLM). **Run on the VM:**
+  `ADVCONTAINER_EXPERIMENT_ENV=1 ~/advc-venv/bin/python -m coupled_env.real.validate_proc` →
+  expect ALL PASS. NOTE: this changes the realized spec of every `proc=visible` / `caps=broad`
+  config, so pre-Phase-2 bank/eval numbers for those configs are not comparable and should be
+  re-collected.
 - **Not yet validated on real Docker:** `--parallel N` (needs ~N cpus + N GB RAM on the VM; the
   dynamic per-episode volumes and honeypot serialization are coded but unrun against Docker — do one
   short validation run before trusting it for the full budget). The default `--parallel 1` reproduces
