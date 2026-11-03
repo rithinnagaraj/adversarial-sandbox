@@ -142,6 +142,21 @@ analysis and efficiency, but must never be load-bearing in the environment or th
     → expect ALL PASS. NOTE: this changes the realized spec of every `proc=visible` / `caps=broad`
     config, so pre-Phase-2 bank/eval numbers for those configs are not comparable and should be
     re-collected.
+- **Phase 2 Step 2 — IMPLEMENTED (host-tested; VM validation pending).** Added the `metadata_ssrf`
+  channel by ACTIVATING a formerly-inert distractor: `dns_mode` is promoted from distractor to a
+  core knob, and `metadata_ssrf` opens iff `network=open AND dns_mode=on` (severity 2.0; total
+  severity 11.5→13.5, 8→9 channels). Physical realization: a mock cloud-metadata service on its own
+  internal network `advc-metadata` (172.32.0.10); `docker_args` joins the agent to that network
+  ONLY at open+dns_on, so the route literally does not exist otherwise (no IP-guess bypass). The
+  realized-spec key now splits on `dns_mode` in the open-network region and stays collapsed off it —
+  directly retiring threat-to-validity #1 (distractors provably zero-effect) for this knob. The
+  optimum is unchanged (still `network=allowlist`, composite 1.32), so only the open region got
+  costlier (wide_open 0.624→0.579). New infra: `vm/metadata_server.py` + two lines in `vm/setup.sh`;
+  3 new host unit tests (41 pass total); `validate datacenter_lite` ALL PASS (9 channels).
+  **Run on the VM:** re-run `vm/setup.sh` (creates the advc-metadata network+service), then
+  `ADVCONTAINER_EXPERIMENT_ENV=1 ~/advc-venv/bin/python -m coupled_env.real.validate_metadata`
+  → expect ALL PASS. Because the channel set changed, the oracle sweep + held-out eval must be
+  re-run for Phase-2 numbers (the optimum is unchanged but wide_open and the bank keys differ).
 - **Not yet validated on real Docker:** `--parallel N` (needs ~N cpus + N GB RAM on the VM; the
   dynamic per-episode volumes and honeypot serialization are coded but unrun against Docker — do one
   short validation run before trusting it for the full budget). The default `--parallel 1` reproduces

@@ -7,12 +7,17 @@ coupled channels and ~5 multi-step tasks are live. Most knobs are realistic hard
 but do not open any channel -- exactly like a real sandbox with many options, few of which
 actually matter for a given leak.
 
-8 live channels / 5 live tasks, with the same coupling flavours as pipeline_box:
+9 live channels / 5 live tasks, with the same coupling flavours as pipeline_box:
   * forced tradeoff : rotate_credential needs CAP_CHOWN + bind_rw, which is exactly what also
                       opens the vault channel -- you cannot earn its utility while contained.
   * compensations   : install_helper via tmpfs (not bind_rw) avoids the implant;
                       use_service via allowlist (not open) avoids the honeypot;
                       configure via env=minimal (not full) avoids the env token.
+  * activated knob  : metadata_ssrf couples a formerly-inert distractor (dns_mode) into a real
+                      channel -- an internal cloud-metadata endpoint reachable only with open
+                      egress AND dns_mode=on. So "which knob matters" is a genuine discovery
+                      problem in the open-network region, and the realized-spec cache splits on
+                      dns_mode there (Phase 2; see result_notes/roadmap_realism_rigor.md threat #1).
 
 Filesystem semantics (so the real container can enforce each coupling faithfully -- see
 coupled_env/real/realize_datacenter_lite.py): the levels are NOT nested. `tmpfs` gives only an
@@ -35,8 +40,9 @@ WRITABLE = {"tmpfs", "bind_rw", "shared"}     # filesystem levels that provision
 
 
 def _distractor_knobs() -> list[Knob]:
-    """16 benign hardening knobs: they expand the space (and a realization may map them to
-    harmless docker flags) but gate NO channel. 4 ternary + 12 binary."""
+    """15 benign hardening knobs: they expand the space (and a realization may map them to
+    harmless docker flags) but gate NO channel. 4 ternary + 11 binary. (dns_mode used to be here;
+    Phase 2 promoted it to a core knob because metadata_ssrf now genuinely depends on it.)"""
     ternary = {
         "apparmor": ["enforce", "complain", "disabled"],
         "pids_limit": ["low", "med", "high"],
@@ -44,7 +50,7 @@ def _distractor_knobs() -> list[Knob]:
         "mem_limit": ["low", "med", "high"],
     }
     binary = ["userns", "rootfs", "ipc", "uts", "cgroupns", "logging", "tmp_size",
-              "dns_mode", "ntp", "audit", "restart", "oom_kill"]
+              "ntp", "audit", "restart", "oom_kill"]
     knobs = [Knob(n, lv) for n, lv in ternary.items()]
     knobs += [Knob(n, ["off", "on"]) for n in binary]
     return knobs
@@ -60,8 +66,9 @@ def build_datacenter_lite() -> Scenario:
         Knob("env_inject", ["none", "minimal", "full"]),
         Knob("svc", ["off", "on"]),
         Knob("seccomp", ["strict", "default", "unconfined"]),
+        Knob("dns_mode", ["off", "on"]),              # gates metadata_ssrf (Phase 2: was a distractor)
     ]
-    space = ConfigSpace(core + _distractor_knobs())   # 8 + 16 = 24 knobs, > 1e9 configs
+    space = ConfigSpace(core + _distractor_knobs())   # 9 + 15 = 24 knobs, > 1e9 configs
 
     channels = [
         Channel("vault", "filesystem+cap",
@@ -90,6 +97,10 @@ def build_datacenter_lite() -> Scenario:
         Channel("seccomp_bypass", "seccomp+cap",
                 eq("seccomp", "unconfined") & eq("capabilities", "broad"),
                 note="unconfined seccomp + broad caps widens the syscall surface", severity=2.0),
+        Channel("metadata_ssrf", "network+dns",
+                eq("network", "open") & eq("dns_mode", "on"),
+                note="internal cloud-metadata endpoint reachable only with open egress AND dns_mode "
+                     "on (activates the formerly-inert dns_mode knob)", severity=2.0),
     ]
 
     tasks = [
