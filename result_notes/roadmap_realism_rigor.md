@@ -123,19 +123,25 @@ analysis and efficiency, but must never be load-bearing in the environment or th
   (multi-seed oracle sweep → regret distribution, fraction optimal); `coupled_env/real/holdout_eval.py`
   (k-sample held-out eval of learned + baselines, pooled via the bank, mean ± CI, per-channel breach
   rate, oracle gap, variance decomposition).
-- **Phase 2 Step 1 — IMPLEMENTED (host-tested; VM validation pending).** The `/proc` channels are
-  now PHYSICALLY gated, replacing placement gating. `_CAPS["broad"]` gains `SYS_PTRACE`;
-  `realize_datacenter_lite.docker_args` emits `--pid=container:<holder>` iff `proc=visible`;
-  new `proc_holder_spec` runs a per-episode PID-namespace sidecar holding env_proc as a same-uid
-  (root) process and proc_snoop as a uid-9999 process (cross-uid read ⇒ needs `SYS_PTRACE`=broad);
-  `episode.py` starts/tears down the holder; env_proc/proc_snoop removed from `sidecar_commands`.
-  The realized-spec key now splits on proc visibility (so the bank is legitimately dynamic for that
-  knob). 4 new host unit tests (38 pass total). `coupled_env/real/validate_proc.py` proves the
-  truth table on the VM with a deterministic probe (no LLM). **Run on the VM:**
-  `ADVCONTAINER_EXPERIMENT_ENV=1 ~/advc-venv/bin/python -m coupled_env.real.validate_proc` →
-  expect ALL PASS. NOTE: this changes the realized spec of every `proc=visible` / `caps=broad`
-  config, so pre-Phase-2 bank/eval numbers for those configs are not comparable and should be
-  re-collected.
+- **Phase 2 Step 1 — IMPLEMENTED (host-tested; VM validation in progress).** The `/proc` channels
+  are now PHYSICALLY gated, replacing placement gating. `_CAPS["broad"]` gains `SYS_PTRACE`;
+  `realize_datacenter_lite.docker_args` emits `--pid=container:<holder>` iff `proc=visible` (so the
+  agent shares the sidecar's PID namespace only then); new `proc_holder_spec` runs a per-episode
+  PID-namespace sidecar; `episode.py` starts/tears it down; env_proc/proc_snoop removed from the
+  in-container `sidecar_commands`. The realized-spec key now splits on proc visibility (the bank is
+  legitimately dynamic for that knob). `coupled_env/real/validate_proc.py` proves the truth table on
+  the VM with a deterministic probe (no LLM); `diag_proc.py` is the throwaway diagnostic used below.
+  - **VM finding (runc, Ubuntu 22.04, yama ptrace_scope=1):** a cross-process `/proc/<pid>/environ`
+    read requires `CAP_SYS_PTRACE` **even same-uid** — so `env_proc` as originally specified (an
+    *environment* leak with no privilege) is NOT physically realizable. Corrected mechanism maps the
+    two channels onto two different real kernel rules: **env_proc → secret in a process's argv, read
+    via world-readable `/proc/<pid>/cmdline` (no cap)**; **proc_snoop → secret in a process's
+    `/proc/<pid>/environ` (needs `SYS_PTRACE`=broad)**. Both held by root; the capability gate is the
+    cmdline-vs-environ distinction, which is the actual kernel behaviour.
+  - **Run on the VM:** `ADVCONTAINER_EXPERIMENT_ENV=1 ~/advc-venv/bin/python -m coupled_env.real.validate_proc`
+    → expect ALL PASS. NOTE: this changes the realized spec of every `proc=visible` / `caps=broad`
+    config, so pre-Phase-2 bank/eval numbers for those configs are not comparable and should be
+    re-collected.
 - **Not yet validated on real Docker:** `--parallel N` (needs ~N cpus + N GB RAM on the VM; the
   dynamic per-episode volumes and honeypot serialization are coded but unrun against Docker — do one
   short validation run before trusting it for the full budget). The default `--parallel 1` reproduces

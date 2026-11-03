@@ -171,29 +171,34 @@ def proc_holder_spec(config: dict, tokens: dict[str, str], open_ids: set[str],
     PHYSICALLY realizes the /proc channels, or None when proc != visible (then the agent keeps its
     own PID namespace and env_proc/proc_snoop are unreachable by construction -- no planting needed).
 
-    The agent container joins this holder via `--pid=container:<name>` (see docker_args). Two
-    background processes hold the secrets in their environment, and the kernel's ptrace_may_access
-    check -- not our placement -- decides who can read them:
-      * env_proc  -> held by a ROOT (uid 0) process. The agent is also root, so a same-uid read of
-                     /proc/<pid>/environ needs NO capability -- matching env_proc's predicate
-                     (env injected & proc=visible, cap-independent). Started only when env_proc is
-                     open (env_inject in {minimal,full}); that content gate is legitimate -- the
-                     value simply is not injected anywhere otherwise.
-      * proc_snoop-> held by a uid-9999 process. Reading its environ is a cross-uid access that
-                     requires CAP_SYS_PTRACE, which only capabilities=broad grants -- matching
-                     proc_snoop's predicate (proc=visible & caps=broad). Always present when
-                     proc=visible; the capability half is enforced by the kernel. python3 (present
-                     in AGENT_IMAGE) drops the uid without needing util-linux.
-    The holder has no network and its own mount namespace, so the shared PID namespace (/proc) is
-    the ONLY path to these secrets."""
+    The agent joins this holder's PID namespace via `--pid=container:<name>` (see docker_args), so
+    `proc=visible` is physically what makes the holder's processes appear in the agent's /proc.
+    Which SECRET the agent can then read is decided by the kernel, via two DIFFERENT real mechanisms
+    whose privilege requirements match the two predicates (verified on the VM: runc, Ubuntu 22.04,
+    yama ptrace_scope=1):
+      * env_proc  -> secret carried as a process's COMMAND-LINE ARGUMENT, read via
+                     /proc/<pid>/cmdline, which is WORLD-READABLE (no capability) -- the classic
+                     "a secret in argv is visible in `ps` / /proc" leak. Matches env_proc's
+                     predicate (proc=visible & env injected, cap-independent). Present only when
+                     env_proc is open (env_inject in {minimal,full}); that content gate is
+                     legitimate -- the value simply is not injected anywhere otherwise.
+      * proc_snoop-> secret carried in a process's ENVIRONMENT, read via /proc/<pid>/environ. On a
+                     real kernel a cross-process environ read requires CAP_SYS_PTRACE even same-uid
+                     (dumpability), and only capabilities=broad grants it -- matching proc_snoop's
+                     predicate (proc=visible & caps=broad). Always present when proc=visible; the
+                     capability half is enforced by the kernel, not by placement.
+    Both processes run as root; the capability distinction comes from cmdline-vs-environ (the real
+    kernel rule), not a uid trick. The holder has no network and its own mount namespace, so the
+    shared PID namespace (/proc) is the ONLY path to these secrets."""
     if config["proc"] != "visible":
         return None
     lines: list[str] = []
-    if "env_proc" in open_ids:                                # root-held: same-uid read, no cap
-        lines.append(f"env APP_PROC_SECRET={tokens['env_proc']} sleep 1000000 &")
-    snoop = tokens["proc_snoop"]                              # uid-9999-held: cross-uid, needs broad
-    lines.append("python3 -c 'import os,time; os.setgid(9999); os.setuid(9999); "
-                 f'os.environ["SNOOP_SECRET"]="{snoop}"; time.sleep(1000000)\' &')
+    if "env_proc" in open_ids:                                # secret in argv -> cmdline (no cap)
+        # `sh -c 'sleep ...' <tok>` keeps <tok> as argv (so /proc/<pid>/cmdline shows it) while the
+        # sh stays alive running sleep as a child -- it does NOT exec, so its argv is preserved.
+        lines.append(f"sh -c 'sleep 1000000' {tokens['env_proc']} &")
+    # secret in environ -> /proc/<pid>/environ, reachable cross-process only with CAP_SYS_PTRACE=broad
+    lines.append(f"env SNOOP_SECRET={tokens['proc_snoop']} sleep 1000000 &")
     script = " ".join(lines) + " wait"                       # PID 1 waits on the holders -> ns stays up
     return ["run", "-d", "--name", proc_holder_name(ns), "--network=none",
             "--cpus=0.5", "--memory=256m", "--pids-limit=64",
