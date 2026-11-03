@@ -40,9 +40,12 @@ WRITABLE = {"tmpfs", "bind_rw", "shared"}     # filesystem levels that provision
 
 
 def _distractor_knobs() -> list[Knob]:
-    """15 benign hardening knobs: they expand the space (and a realization may map them to
-    harmless docker flags) but gate NO channel. 4 ternary + 11 binary. (dns_mode used to be here;
-    Phase 2 promoted it to a core knob because metadata_ssrf now genuinely depends on it.)"""
+    """16 hardening knobs that look like nuisance options. 15 gate NO channel (4 ternary + 11 of
+    the binary). The 16th, `dns_mode`, is the ONE ACTIVATED distractor (Phase 2): it sits here,
+    indistinguishable from the inert ones, but metadata_ssrf genuinely depends on it -- so the
+    designer must DISCOVER that a distractor-shaped knob matters. It is kept in this list (not
+    promoted to `core`) precisely so the knob vector's layout is unchanged (prior checkpoints stay
+    aligned) and the discovery stays honest -- nothing in the knob's placement signals it matters."""
     ternary = {
         "apparmor": ["enforce", "complain", "disabled"],
         "pids_limit": ["low", "med", "high"],
@@ -50,7 +53,7 @@ def _distractor_knobs() -> list[Knob]:
         "mem_limit": ["low", "med", "high"],
     }
     binary = ["userns", "rootfs", "ipc", "uts", "cgroupns", "logging", "tmp_size",
-              "ntp", "audit", "restart", "oom_kill"]
+              "dns_mode", "ntp", "audit", "restart", "oom_kill"]   # dns_mode: activated (metadata_ssrf)
     knobs = [Knob(n, lv) for n, lv in ternary.items()]
     knobs += [Knob(n, ["off", "on"]) for n in binary]
     return knobs
@@ -66,9 +69,11 @@ def build_datacenter_lite() -> Scenario:
         Knob("env_inject", ["none", "minimal", "full"]),
         Knob("svc", ["off", "on"]),
         Knob("seccomp", ["strict", "default", "unconfined"]),
-        Knob("dns_mode", ["off", "on"]),              # gates metadata_ssrf (Phase 2: was a distractor)
     ]
-    space = ConfigSpace(core + _distractor_knobs())   # 9 + 15 = 24 knobs, > 1e9 configs
+    # dns_mode stays among the distractors (see _distractor_knobs) even though metadata_ssrf depends
+    # on it: keeping the layout identical preserves checkpoint alignment and keeps the "which knob
+    # matters" discovery honest.
+    space = ConfigSpace(core + _distractor_knobs())   # 8 core + 16 distractors = 24 knobs, > 1e9 configs
 
     channels = [
         Channel("vault", "filesystem+cap",

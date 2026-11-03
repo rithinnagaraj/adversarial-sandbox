@@ -1,10 +1,11 @@
 """Real Docker realization of `datacenter_lite` (8 live channels, 5 live tasks).
 
-Mirrors pipeline_box's realization and reuses the v1 mechanics. Only the 9 *core* knobs
-affect the container (Phase 2 promoted dns_mode from distractor to core: it now gates
-metadata_ssrf); the 15 distractor knobs gate no channel, so they are intentionally NOT applied
-physically -- they exist to enlarge the designer's search space, and a config's reward is
-invariant to them (the designer learns to ignore them). Resource defaults are fixed.
+Mirrors pipeline_box's realization and reuses the v1 mechanics. The 8 *core* knobs plus the one
+ACTIVATED distractor `dns_mode` (Phase 2: it gates metadata_ssrf) affect the container; the other
+15 distractor knobs gate no channel, so they are intentionally NOT applied physically -- they
+exist to enlarge the designer's search space, and a config's reward is invariant to them (the
+designer learns to ignore them). dns_mode is left in the distractor list so the knob-vector layout
+is unchanged. Resource defaults are fixed.
 
 Reachability == ground truth: a channel's token is planted/launched ONLY when that channel's
 predicate holds for the config (`open_ids`, computed from the scenario in episode.py). The
