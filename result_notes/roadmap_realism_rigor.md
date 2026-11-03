@@ -123,7 +123,7 @@ analysis and efficiency, but must never be load-bearing in the environment or th
   (multi-seed oracle sweep → regret distribution, fraction optimal); `coupled_env/real/holdout_eval.py`
   (k-sample held-out eval of learned + baselines, pooled via the bank, mean ± CI, per-channel breach
   rate, oracle gap, variance decomposition).
-- **Phase 2 Step 1 — IMPLEMENTED (host-tested; VM validation in progress).** The `/proc` channels
+- **Phase 2 Step 1 — DONE (VM-validated, ALL PASS 2026-11-04).** The `/proc` channels
   are now PHYSICALLY gated, replacing placement gating. `_CAPS["broad"]` gains `SYS_PTRACE`;
   `realize_datacenter_lite.docker_args` emits `--pid=container:<holder>` iff `proc=visible` (so the
   agent shares the sidecar's PID namespace only then); new `proc_holder_spec` runs a per-episode
