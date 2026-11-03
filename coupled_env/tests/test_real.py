@@ -264,17 +264,20 @@ def test_proc_holder_spec_gating():
     flat = " ".join(spec)
     assert spec[:4] == ["run", "-d", "--name", "advc-procholder-ep3"]
     assert "--network=none" in spec                       # /proc is the only path to the secrets
-    assert toks["env_proc"] in flat and toks["proc_snoop"] in flat
-    # env_proc rides in argv (cmdline, world-readable, no cap); proc_snoop rides in environ
-    # (ptrace-gated -> needs broad). The two live in different real /proc files.
-    assert f"sh -c 'sleep 1000000' {toks['env_proc']}" in flat
-    assert f"SNOOP_SECRET={toks['proc_snoop']}" in flat
+    # tokens are passed via -e (the holder's own env) and referenced as $EP/$SNOOP, so the raw
+    # tokens NEVER appear in the world-readable PID 1 cmdline (the `sh -lc` script body).
+    assert f"EP={toks['env_proc']}" in spec and f"SNOOP={toks['proc_snoop']}" in spec
+    script = spec[-1]                                     # the `sh -lc` script string
+    assert toks["env_proc"] not in script and toks["proc_snoop"] not in script
+    assert '"$EP"' in script and '"$SNOOP"' in script    # env_proc in argv, proc_snoop in environ
     # proc=visible but env NOT injected -> env_proc absent, proc_snoop still present
     noenv = dict(vis, env_inject="none")
     noenv_ids = {c.id for c in sc.open_channels(noenv)}
     assert "env_proc" not in noenv_ids
-    nflat = " ".join(dl.proc_holder_spec(noenv, toks, noenv_ids, ""))
-    assert toks["env_proc"] not in nflat and toks["proc_snoop"] in nflat
+    nspec = dl.proc_holder_spec(noenv, toks, noenv_ids, "")
+    nflat = " ".join(nspec)
+    assert toks["env_proc"] not in nflat              # env_proc not passed at all when not injected
+    assert f"SNOOP={toks['proc_snoop']}" in nspec     # proc_snoop always present at proc=visible
 
 
 def test_realized_key_splits_on_proc_visibility():
