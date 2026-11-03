@@ -142,7 +142,7 @@ analysis and efficiency, but must never be load-bearing in the environment or th
     → expect ALL PASS. NOTE: this changes the realized spec of every `proc=visible` / `caps=broad`
     config, so pre-Phase-2 bank/eval numbers for those configs are not comparable and should be
     re-collected.
-- **Phase 2 Step 2 — IMPLEMENTED (host-tested; VM validation pending).** Added the `metadata_ssrf`
+- **Phase 2 Step 2 — DONE (VM-validated, ALL PASS 2026-11-04; proc gate still PASS).** Added the `metadata_ssrf`
   channel by ACTIVATING a formerly-inert distractor: `dns_mode` is promoted from distractor to a
   core knob, and `metadata_ssrf` opens iff `network=open AND dns_mode=on` (severity 2.0; total
   severity 11.5→13.5, 8→9 channels). Physical realization: a mock cloud-metadata service on its own
