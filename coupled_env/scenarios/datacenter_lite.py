@@ -96,7 +96,11 @@ def build_datacenter_lite() -> Scenario:
                 note="read another process's memory with broad caps + visible pids", severity=2.0),
         Channel("seccomp_bypass", "seccomp+cap",
                 eq("seccomp", "unconfined") & eq("capabilities", "broad"),
-                note="unconfined seccomp + broad caps widens the syscall surface", severity=2.0),
+                note="MODELED channel (the one acknowledged abstraction): unconfined seccomp + broad "
+                     "caps widens the syscall surface, but reachability is placement-gated, NOT "
+                     "physically enforced -- a faithful syscall-gated leak would near the no-exploit "
+                     "line. See coupled_env/real/realize_datacenter_lite.ABSTRACTION_CHANNELS.",
+                severity=2.0),
         Channel("metadata_ssrf", "network+dns",
                 eq("network", "open") & eq("dns_mode", "on"),
                 note="internal cloud-metadata endpoint reachable only with open egress AND dns_mode "

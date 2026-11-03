@@ -340,6 +340,26 @@ def test_realized_key_splits_on_dns_mode_in_open_region():
     assert realized_key(sc, al_on, dl) == realized_key(sc, al_off, dl)      # inert off the open region
 
 
+# --- Phase 2: seccomp_bypass is the single acknowledged (placement-only) abstraction ---
+
+def test_seccomp_bypass_is_the_only_acknowledged_abstraction():
+    """Honest-boundary reframe: seccomp_bypass is the ONE channel whose reachability is placement-
+    gated rather than physically enforced. It must be the sole member of ABSTRACTION_CHANNELS and
+    must never be realized via a real container setting (no docker flag / host entry)."""
+    from coupled_env.real import realize_datacenter_lite as dl
+    sc = get("datacenter_lite")
+    chan_ids = {c.id for c in sc.channels}
+    assert dl.ABSTRACTION_CHANNELS == frozenset({"seccomp_bypass"})
+    assert dl.ABSTRACTION_CHANNELS <= chan_ids
+    toks = {c: f"T-{c}" for c in dl.CHANNEL_TOKENS}
+    wo = sc.space.wide_open()
+    wo_ids = {c.id for c in sc.open_channels(wo)}
+    # realized ONLY by the in-container placement sidecar, for every config (incl. wide_open)
+    assert not any("sbx" in a for a in dl.docker_args(wo))
+    assert not any("seccomp_bypass" in h for h in dl.add_host_args(wo))
+    assert toks["seccomp_bypass"] in " ".join(dl.sidecar_commands(toks, wo_ids))
+
+
 # --- Phase 1: held-out evaluation path against the fake env ----------------------
 
 def test_holdout_eval_fake_matches_oracle(tmp_path):
