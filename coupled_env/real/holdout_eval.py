@@ -75,11 +75,13 @@ def evaluate_config(sc, name, cfg, realize_mod, agent, runcfg, instructions, w_u
     for _ in range(need):
         scored, out, wall = run_one(sc, cfg, realize_mod, agent, runcfg, instructions, w_u, fake)
         cache.add(key, outcome_sample(out, scored, wall), config=sc.space.to_vector(cfg))
+        if out.invalid_kind:                              # surface the reason instead of silently dropping
+            print(f"  ! invalid episode ({out.invalid_kind}): {(out.error or '')[:200]}")
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"config_name": name, "seed": seed, "key": key,
                                  "composite": scored["composite"], "breached": scored["breached"],
                                  "tasks_done": scored["tasks_done"],
-                                 "invalid_kind": out.invalid_kind}) + "\n")
+                                 "invalid_kind": out.invalid_kind, "error": out.error}) + "\n")
     samples = cache.valid_samples(key)
     comps = [s["composite"] for s in samples]
     ci = mean_ci(comps)
@@ -128,6 +130,15 @@ def main():
         realize_mod = realize_pkg.get_realization(sc.id)
         if os.environ.get("ADVCONTAINER_EXPERIMENT_ENV") != "1":
             sys.exit("refusing real run: set ADVCONTAINER_EXPERIMENT_ENV=1 (VM only), or use --fake.")
+        # fail fast (before any episode) if the provider's API key is missing -- otherwise every
+        # episode harness-faults on its first model call and silently yields 0 samples.
+        key_env = {"jarvis": "JARVISLABS_API_KEY", "sarvam": "SARVAM_API_KEY",
+                   "openrouter": "OPENROUTER_API_KEY", "bedrock": "AWS_BEARER_TOKEN_BEDROCK",
+                   "bedrock-openai": "AWS_BEARER_TOKEN_BEDROCK"}.get(args.provider)
+        if key_env and not os.environ.get(key_env):
+            sys.exit(f"refusing real run: ${key_env} is not set in this shell. Load your key file "
+                     f"first (e.g. `set -a; . ~/.jarvis.env; set +a`); do not paste the key on the "
+                     f"command line.")
         model = args.model or {"sarvam": "glm5.3", "openrouter": "z-ai/glm-5.3",
                                "jarvis": "glm-5.3"}.get(args.provider)
         if not model:
